@@ -1,0 +1,8 @@
+(defun (start)
+  (cond ((not *quiet*)
+          (let ((g (gc)))
+            (terpri)
+            (princ (car g))
+            (princ " NODES\n")
+            (princ (cadr g))
+            (princ " VCELLS\n\n")))))

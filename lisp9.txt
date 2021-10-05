@@ -1,0 +1,3621 @@
+
+	                 ____   _______________________
+	                /   /  /   /      /      /     \
+	               /   /  /   /    __/   -  /   -   \
+	              /   /__/   /_\   \     __/\__     /
+	             /      /   /      /    /     /    /
+	            /______/___/______/____/     /____/
+
+	                        2019-07-28
+
+	           By Nils M Holm, in the public domain
+
+	LISP9 is a lexically scoped LISP-1 with tail call elimination.
+	It is a retro LISP in the sense that it does not add any new
+	ideas, but merely implements concepts that have been established
+	long ago. LISP9 is similar to R4RS Scheme to a degree that many
+	trivial Scheme programs can probably be converted to LISP9 by
+	performing a few simple substitutions, like SET! -> SETQ, etc.
+
+	The LISP9 system consists of a read-eval-print loop (REPL), a
+	bytecode compiler, and an ad-hoc, SECD-like abstract machine.
+	LISP9 is also a retro LISP in the sense that its heap space
+	would roughly fit in the core memory of a moderately sized KL10,
+	but the default size of the heap space can be extended easily.
+
+	Although the name of LISP9 may suggest that it runs on Plan 9,
+	it currently doesn't (unless you use APE). It may at some point,
+	though.
+
+
+	** INTRODUCTION ************************************************
+
+	-- PROGRAMS ----------------------------------------------------
+
+	A program is a sequence of forms that will be evaluated from
+	top to bottom. When typed in at the REPL ("Read-Eval-Print Loop,
+	the interpreter prompt), the value of each form will print.
+	When loaded from a file, forms will evaluate silently.
+
+	The following program computes the mean of a list of numbers:
+
+	(defun (mean a)
+	  (let loop ((p a)
+	             (s 0))
+	    (if (null p)
+	        (div s (length a))
+	        (loop (cdr p) (+ s (car p))))))
+
+	(mean '(1 2 3 4 5))
+
+	The first form (using DEFUN) defines the MEAN function and the
+	second form applies the function to a list of numbers from one
+	to five.
+
+	If the program is to be run in batch mode, without user
+	interaction, the second form should print its result:
+
+	(print (mean '(1 2 3 4 5)))
+
+	While the above program is perfectly workable, there are many
+	ways to implement the MEAN function, for example using a DO loop:
+
+	(defun (mean a)
+	  (do ((p a (cdr p))
+	       (s 0 (+ s (car p))))
+	      ((null p) (div s (length a)))))
+
+	or using the higher-order function FOLD:
+
+	(defun (mean a)
+	  (div (fold + 0 a)
+	       (length a)))
+
+
+	-- FORMS -------------------------------------------------------
+
+	A LISP9 program is a set of "forms", where each form is either
+
+	- a variable
+	- a data object
+	- a function applications
+	- or a special form
+
+	A variable is represented by its name, which is a sequence of
+	symbolic characters, mostly letters, digits, and some special
+	characters. See the FORMAL SYNTAX for details.
+
+	Examples:  foo  x123  *  a+b
+
+	Data objects include numbers, characters (chars), strings of
+	chars, vectors, lists, ordered pairs, symbols, and functions.
+	There are also some special objects. All types of data objects
+	will be explained in the next chapter.
+
+	Examples: 123        '(1 2 3)   'foo
+	          #\x        #(4 5 6)   cons
+	          "hello!"   '(a . b)   nil
+
+	Function applications apply a function to values (data objects
+	or variables). Functions themselves are typically bound to
+	variables. The application itself has the shape of a list, with
+	the function in the first position and the arguments in
+	subsequent positions. See the following sections for details.
+
+	Examples: (+ 1 2 3)
+	          (cons 'a 'b)
+	          (cdr '(a b))
+	          (gensym)
+
+	Special forms have the same shape as function applications, but
+	different semantics. They are mostly used to define variables
+	and macros, bind variables to values, and control the flow of
+	program evaluation.
+
+	Examples: (def foo 17)
+	          (let ((bar 18))
+	            (if (= 1 1) foo bar))
+
+
+	-- EXPRESSIONS -------------------------------------------------
+
+	The terms "form" and "expression" are often used as synonyms,
+	but it is important to distinguish between special forms and
+	(non-special) forms.
+
+	Every expression evaluates to a value, which is written, for
+	example, as
+
+	         5  =>  5   ; five evaluates to itself
+
+	   (+ 1 2)  =>  3   ; + applied to 1 and 3 evaluates to 3
+
+	(if 1 2 3)  =>  2   ; IF applied to 1, 2, 3 evaluates to 2
+
+	      cons  =>  #<function>
+	                    ; the variable CONS evaluates to some
+	                    ; function
+
+	The latter is an example for a variable evaluating to the value
+	that is bound to it.
+
+
+	-- SPECIAL FORMS -----------------------------------------------
+
+	Even special forms, like IF, evaluate to a value. Some special
+	forms have a syntax that deviates from that which was described
+	in the previous section. For instance, the first argument in
+
+	(cond ((foo) bar) (else baz))
+
+	looks like the application of the value of (foo) to BAR. However,
+	this is part of COND's syntax rather than a function application.
+	What COND really does it to evaluate (foo) and, if it returns a
+	"true" value, evaluate BAR. Else it evaluates BAZ.
+
+	In general, special forms do not evaluate their arguments, but
+	do something special with them. Hence their name. The arguments
+	of special forms are often written in angle bracket in their
+	descriptions to indicate that something special happens. E.g.:
+
+	(COND <CLAUSE> ...) => OBJ
+
+
+	-- DEFINITIONS -------------------------------------------------
+
+	Top-level (global) variables are defined by the DEF special form:
+
+	(DEF <VAR> EXPR)
+
+	Here <VAR> denotes a symbol that will be used as a variable and
+	EXPR denotes an expression of any type. The DEF special form
+	evaluates EXPR, but not <VAR>, which would be impossible anyway,
+	because it is not yet defined. It then defines <VAR> and binds
+	it to the value of EXPR. For example:
+
+	(def helpfile "lisp9.txt")
+
+	(def square (lambda (x) (* x x)))
+
+	DEF forms can only appear at the top level of a program, i.e.
+	they cannot appear as arguments in any other forms. They
+	evaluate to (the value of) EXPR, but since that value cannot be
+	used for anything, their value is specified as "unspecific".
+
+	Note that everything (except for MACROS and local variables,
+	which will be explained later) is defined using DEF -- even
+	functions. The second example above creates a function that
+	computes the square of its argument and binds it to the newly
+	created variable SQUARE. Note that the DEFUN special form is
+	normally used to define functions, though:
+
+	(defun (square x) (* x x))
+
+	DEFUN is a convenient abbreviation for the combination of DEF
+	and LAMBDA.
+
+	A variable can be redefined by using DEF with the same name
+	again. Doing so will change the binding of the variable:
+
+	(def foo 'zzz)
+	foo => zzz
+
+	(def foo 'bar)
+	foo => bar
+
+	Local functions are defined by LAMBDA special forms, which will
+	be explained below.
+
+
+	-- TYPE SIGNATURES ---------------------------------------------
+
+	A type signature describes the data types expected by a function
+	and the type of object returned by it. A signature generally
+	looks like this:
+
+	(FUNCTION TYPE1 TYPE2 ...) => TYPE
+
+	meaning that FUNCTION expects TYPE1, TYPE2, etc, and returns
+	TYPE. When there are multiple arguments of the same type, they
+	use an index to distinguish them, e.g.
+
+	(= N1 N2 ...) => T/NIL
+
+	The ellipsis (...) indicates that the preceding type occurs
+	zero or more times. I.e. the above signature says that the "="
+	function expects one or more fixnums.
+
+	The following type names will be used in the remainder of this
+	document:
+
+	EXPR      Any type of data object can be used in the place of
+	OBJ       EXPR, which is used to describe arguments. OBJ is used
+	          for return types, meaning that any type of object may
+	          be returned.
+
+	LIST      These are different types of lists and pairs, which
+	DLIST     will be described later. They indicate the list,
+	ALIST     dotted list, association list, and ordered pair,
+	PAIR      respectively. These types are ordered by generality
+	          as follows: PAIR > DLIST > LIST > ALIST.
+
+	CHAR      A char (character) is expected or returned.
+	Cn
+
+	FIXNUM    A fixnum (small integer) is expected or returned.
+	Nn
+
+	FUN       A function is expected or returned. The notation FUN^N
+	FUN^N     indicates that a function of N arguments is expected.
+
+	STRING    A string is expected or returned.
+	Sn
+
+	SYMBOL    A string is expected or returned.
+
+	T/NIL     Used to indicate that a function returns either T
+	          (truth) or NIL (falsity). Such functions are called
+	          predicates.
+
+	UNSPECIFIC  Indicates that the value returned by a function is
+	          uninteresting and should not be used.
+
+	VECTOR    A vector (one-dimensional array) is expected or
+	Vn        returned.
+
+
+	-- FUNCTIONS ---------------------------------------------------
+
+	Functions are created by the LAMBDA special form:
+
+	(LAMBDA <FORMALS> EXPR1 EXPR2 ...)
+
+	The special form contains a formal argument list, which names
+	the variables of the function (see LAMBDA), and a body comprised
+	of any positive number of expressions.
+
+	A function is applied by evaluating its arguments, binding each
+	of its variables for the corresponding argument and with these
+	bindings in effect evaluating the body of the function. Before
+	the value of the body is returned, the bindings will be
+	destroyed.
+
+	For instance, the function application
+
+	((lambda (a b) (* a b b)) (+ 1 1) 5)
+
+	will
+
+	- evaluate (+ 1 1), giving 2
+	- evaluate 5, giving 5
+	- bind 2 to A
+	- bind 5 to B
+	- evaluate (* a b b) = (* 2 5 5), giving 50
+	- unbind A and B, restoring their previous values
+	- return the result, 50
+
+
+	-- LEXICAL SCOPE -----------------------------------------------
+
+	Variable bindings have lexical scope in LISP9, which means that
+	the bindings of free variables (variables that are not defined
+	by a function) will be closed over and "remembered" in the
+	resulting function object. For instance:
+
+	(let ((a 1))
+	  (lambda (b) (+ a b)))  ; remember a=1
+
+	will return a function that adds 1 to its argument, even if the
+	value bound to A should change at a later time. In the lexical
+	(textual) context of (lambda (b) (+ a b)), A has the value 5,
+	so the function will use exactly that value:
+
+	(let ((a 1))
+          (let ((f (lambda (b) (+ a b))))  ; remember a=1
+	    (let ((a 0))
+	      (f 5))))    =>  6
+
+	Even though in the lexical context of the application of F, A
+	has the value 0, the value remembered in F will be used.
+
+	Note that the binding of a variable can be changed (by using
+	SETQ) inside of the *same* lexical scope (indicated by LET),
+	even *after* defining a function:
+
+	(let ((a 1))
+	  (let ((f (lambda (b) (+ a b))))
+	    (setq a 2)
+	    (f 5)))     =>  7
+
+	This is particularly important at the top level, because it
+	allows to create mutually recursive functions:
+
+	(defun (even n) (if (= 0 n) t   (odd  (- n 1))))
+	(defun (odd  n) (if (= 0 n) nil (even (- n 1))))
+
+	Here the binding of ODD in EVEN is changed when defining ODD.
+
+
+	-- RECURSION ---------------------------------------------------
+
+	Recursion -- a function applying itself -- is a fundamental
+	principle in LISP9. All special forms that implement iteration
+	(loops) use recursion internally. Recursion is cheap in LISP9
+	and tail-recursive functions are guaranteed to evaluate in
+	constant space. For instance, given:
+
+	(defun (f x) (if (= 0 x) t (f (- x 1))))
+
+	the applications (f 1) and (f 1000) will both require the same
+	amount of space while evaluating. Given the functions
+
+	(def (g x) x)
+	(def (f x) (if (= 0 x) t (g (f (- x 1)))))
+
+	however, (f 1000) will use much more space than (f 1), because
+	F is not tail-recursive. A function is tail-recursive only if
+	no function is applied to the result of its recursive
+	application. In the second example, G is applied to the value
+	of (f (- x 1)), so F is not tail-recursive.
+
+	Tail recursion also applies to mutually recursive functions.
+	When F tail-applies G and G tail-applies F, both functions are
+	tail-recursive. E.g.:
+
+	(def (f x) (if (= 0 x) t (g x)))
+	(def (g x) (f (- x 1)))
+
+	are both tail-recursive.
+
+	Applications in the following positions in core special forms
+	are tail applications (T):
+
+	(IF x T T)
+	(IF* x T)
+	(PROG x ... T)
+	(LAMBDA <FORMALS> x ... T)
+
+	The same is valid for some derived special forms. Such positions
+	will be called "tail positions" in the descriptions of derived
+	special forms.
+
+
+	-- SYNTAX ------------------------------------------------------
+
+	The core syntax of the LISP9 language consists of the data
+	external representations of the data object (see next chapter),
+	function application, and the following special forms:
+
+	APPLY  DEF  IF  IF*  MACRO  PROG  QUOTE  SETQ  LAMBDA
+
+	There are additional syntactic constructs, which are derived
+	from the above, which will be listed in the next section.
+
+
+	-- DERIVED SYNTAX (MACROS) -------------------------------------
+
+	A macro is used to define new special forms based on existing
+	ones. The special form
+
+	(macro <keyword> fun)
+
+	defines a new special form introduced by the symbol in the place
+	of <keyword> and binds it to the macro expander FUN. FUN is a
+	function that takes the arguments of the corresponding special
+	form as arguments and transforms them to a derived form that
+	implements the semantics of the special form. For instance,
+
+	(macro when (lambda (p . xs) @(if ,p (prog . ,xs))))
+
+	creates a new derived special form WHEN that is like IF without
+	an alternative branch, but with any number of expressions in the
+	consequent branch. I.e. the derived syntax
+
+	(when 1 2 3 4 5)
+
+	is transformed to the core syntax
+
+	(if 1 (prog 2 3 4 5))
+
+	by the WHEN macro. Predefined derived special forms of LISP9
+	include:
+
+	LET  LET*  LABELS  AND  OR  COND  CASE  DO  QQUOTE
+
+
+	-- EVALUATION --------------------------------------------------
+
+	Evaluation of expressions comprises the following steps, in
+	exactly this order
+
+	(1) reading the expression (via READ)
+
+	(2) expansion of abbreviations and derived syntax
+
+	(3) compilation to bytecode
+
+	(4) interpretation by an abstract machine
+
+	Of course, the expansion of derived syntax in turn involves the
+	application of a macro expander, which is a function that is
+	already compiled to bytecode. I.e. step (4) takes places two
+	times, once while expanding macros in an expression, and another
+	time when interpreting the expanded form.
+
+	Hence the entire LISP9 language is available when writing macros.
+
+
+	-- COMMENTS ----------------------------------------------------
+
+	A comment starts with a semicolon and extens up to the end of
+	the line in which it started:
+
+	; this is a comment
+
+	Comments are ignored at the reader level, i.e. they may occur
+	anywhere in a program where non-relevant white space may occur.
+	(I.e., not in string literals, char literals, fixnum literals,
+	symbolic names, etc).
+
+	In earlier versions of LISP9 comments were data objects. This
+	approach turned out to impose too many restrictions on the
+	placement of comments and has hence been abandoned.
+
+
+	** DATA OBJECTS ************************************************
+
+	-- T -----------------------------------------------------------
+
+	T is a special object that indicates logical truth. Although all
+	objects exept for NIL indicate truth, T is the canonical "true"
+	value. It is returned by predicates in order to signal success
+	(a positive result). T is self-quoting and 'T equals T.
+
+	Examples:
+
+	(listp '(1 2 3))  =>  t
+	(if t 'con 'alt)  =>  con
+
+
+	-- NIL ---------------------------------------------------------
+
+	NIL is a special object that indicates both the end of a list
+	and logical falsity. It is returned by predicates to indicate
+	failure (a negative result). NIL is also the only value that
+	will select the alternative value when passed to IF and IF*.
+	NIL is self-quoting and 'NIL equals NIL.
+
+	Examples:
+
+	(null nil)          =>  t
+	(not nil)           =>  t
+	(listp 5)           =>  nil
+	(if nil 'con 'alt)  =>  alt
+	(if* nil 'alt)      =>  alt
+
+
+	-- SYMBOLS -----------------------------------------------------
+
+	A symbol is a sequence of characters that represents itself. The
+	characters that may be used to construct symbols include
+
+	- the letters a-z
+	- the letters A-Z (but the reader will fold them to lower case)
+	- the decimal digits 0-9
+	- all special ASCII characters except for these:
+	  ( ) [ ] { } ; # ' @ ` ,
+
+	A symbol that has the form of a FIXNUM will be interpreted as a
+	fixnum and not as a symbol. E.g. 0, -1, and +123 are not symbol
+	names, because they look like fixnums.
+
+	A symbol must be quoted (see QUOTE) in expressions in order to
+	distinguish it from a VARIABLE.
+
+	Examples:
+
+	'foo  =>  foo
+	'*    =>  *
+	x^2   =>  x^2
+
+
+	-- LISTS -------------------------------------------------------
+
+	A list is a heterogenous, forward-linked data structure that
+	consists of a head (also called "car part") and tail (also
+	called "cdr part"). The external representation of a list is
+
+	(x1 x2 ... xN)
+
+	where the X's are the elements of the list. List elements can
+	only be extracted and removed from the head of a list:
+
+	(car '(1 2 3))  =>  1
+	(cdr '(1 2 3))  =>  (2 3)
+
+	There are also functions for accessing random elements of a
+	list, concatenating lists, etc, but note that all these
+	functions are based on the above CAR and CDR operations.
+	Hence all list operations have linear time complexity.
+
+	The empty list () is a synonym for NIL.
+
+	Non-empty list objects have to be quoted in expressions in order
+	to distinguish them from function applications and special forms.
+	E.g.
+
+	(cons 1 2)   ; is the application of CONS to 1 and 2
+	'(cons 1 2)  ; is a list containing CONS, 1, and 2
+
+	Examples:
+
+	()                   =>  nil
+	'(foo bar baz)       =>  (foo bar baz)
+	(cons (- 2 1) nil)   =>  (1)
+	(list 1 2 (+ 1 2))   =>  (1 2 3)
+
+
+	-- PAIRS -------------------------------------------------------
+
+	A (dotted) "pair" is an ordered pair of the form (A . B) where A
+	is called the CAR and B the CDR part of the pair. A fresh pair
+	is created by the CONS function and its respective parts are
+	extracted by the CAR and CDR functions. The following equations
+	hold (where = indicates EQUAL):
+
+	(car (cons x y))        =  x
+	(cdr (cons x y))        =  y
+	(cons (car z) (cdr z))  =  z  ; given that Z is a pair
+
+	A "list" is either the empty list NIL or a pair whose CDR part
+	is another list. Note that this definition is recursive, so
+
+	(A . NIL)
+	(B . (A . NIL))
+	(C . (B . (A . NIL)))
+	etc
+
+	are all lists. A list of the form (A . list) is normally written
+	as (A list). Hence
+
+	          (A . NIL)   = (A)
+	     (B . (A . NIL))  = (B . (A))       = (B A)
+	(C . (B . (A . NIL))) = (C . (B . (A))) = (C . (B A)) = (C B A)
+
+	A "dotted list" is a list whose rightmost element is not NIL. It
+	is a generalization of the dotted pair. E.g.:
+
+	(D C B . A)
+	(B C . A)
+	(B . A)
+
+	Examples:
+
+	'(a . b)                 =>  (a . b)
+	(cons 'a 'b)             =>  (a . b)
+	(cons 'a (cons 'b nil))  =>  (a b)
+	(cons 'a '(b c))         =>  (a b c)
+	(cons 'a '(b . c))       =>  (a b . c)
+	(cons '(a) '(b c))       =>  ((a) b c)
+
+
+	-- ASSOCIATION LISTS -------------------------------------------
+	-- A-LISTS -----------------------------------------------------
+
+	An association list (or A-list) is a list of pairs:
+
+	((<key1> . <value1>) (<key2> . <value2>) ...)
+
+	where the car part of each pair is a key associated with a
+	value, which is stored in the CDR part of the same key. Hence
+	A-lists implement a very simple (and O(n)) form of associative
+	storage. Values are retrieved from them using the ASSOC, ASSV,
+	and ASSQ functions
+
+	Examples:
+
+	'((a . 1) (b . 2) (c . 3))
+
+	'(("I" . 1) ("V" . 5) ("X" . 10) ("L" . 50) ("C" . 100)
+	  ("D" . 500) ("M" . 1000))
+
+
+	-- VECTORS -----------------------------------------------------
+
+	A vector is a one-dimensional heterogenous array of fixed size.
+	Elements of a vector can be accessed via their index (position)
+	within the vector. The external representation of a vector is
+
+	#(x1 x2 ... xN)
+
+	where the X's are the elements of the vector. Vector elements
+	can be retrieved using the VREF function and changed by VSET.
+	There are more functions for for manipulating vectors, which
+	will be explained in the section about vector functions.
+
+	Vector literals are self-quoting and immutable.
+
+	Examples:
+
+	#(foo 123 "bar")      =>  #(foo 123 "bar")
+	(vector 1 2 (+ 1 2))  =>  #(1 2 3)
+
+
+	-- STRINGS -----------------------------------------------------
+
+	A string is a one-dimensional homogeneous array of characters.
+	It has a fixed size. Individual chars of a string can be
+	accessed via their index (position) within the string. The
+	external representation of a string is
+
+	"<char>..."
+
+	where the <char> indicates any ASCII character. Chars can be
+	retrieved using the SREF function and changed by SSET. There
+	are more functions for for manipulating strings, which will be
+	explained in the section about string functions.
+
+	To include a quote character (") in a string, it has to be
+	prefixed with a backslash (\). A backslash can be included by
+	prefixing it with another backslash. Any 8-bit value can be
+	included in a string using the notation \O, where O is an octal
+	number of three places at most. Furthermore, the following
+	abbreviations exist:
+
+	Abbr.   Octal   ASCII
+	\t      \11     horizontal tabulator
+	\n              newline sequence, CR, LF, or CRLF
+
+	The three-digit limit on \O codes exists in order to distinguish
+	character sequences from digit characters. For instance, "\123"
+	denotes the character #\S, but "\0123" denotes a newline char
+	(\012) followed by the digit "3".
+
+	String literals are self-quoting and immutable.
+
+	Examples:
+
+	                           ; contains the characters
+	"hello"    =>  "hello"     ; h e l l o
+	"\"foo\""  =>  "\"foo\""   ; " f o o "
+	"a\\b"     =>  "a\\b"      ; a \ b
+	"0\0121"   =>  "0\n1"      ; 0 <newline> 1
+	"0\121"    =>  "0Q"        ; 0 Q
+	"\33[H"    =>  "\33[H"     ; <ESC> [ H
+
+
+	-- FIXNUMS -----------------------------------------------------
+
+	A fixnum is a small integer number. Its range depends on the
+	implementation, but on a two's complement 32-bit machine it
+	extends from -2^31 to 2^31-1 (-2,147,483,648 to 2,147,483,647).
+
+	The external representation of a fixnum object consists of the
+	decimal digits of the fixnum with an optional sign (+ or -)
+	attached. Optionally, it may be prefixed with #<radix>r,
+	specifying a base different than ten for reading the fixnum.
+	<Radix> must be in the range from 2 to 36. For instance,
+
+	#16rfff    =>  4095  ; hexa-decimal
+	#2r101010  =>  42    ; binary
+	#8r177     =>  127   ; octal
+
+	Examples:
+
+	0       =>  0
+	-1      =>  -1
+	+123    =>  123
+	0099    =>  99
+	#8r+20  =>  16
+	#36r-z  =>  -35
+
+
+	-- CHARS -------------------------------------------------------
+
+	A char is a small integer representing a code point in the
+	extended ASCII alphabet (where no particular glyphs are
+	associated with the values 127 to 255).
+
+	The external representation is
+
+	#\<charname>
+
+	where the <charname> can be any of the following:
+
+	- a printable ASCII character, representing itself
+	- \O, where O is an octal number representing the
+	  corresponding code point
+
+	Furthermore, the following abbreviated <charname>'s exist:
+
+	Abbr.   Octal   ASCII
+	#\ht    #\\11   HT, horizontal tab
+	#\nl    #\\12   LF (newline)
+	#\sp    #\\40   space
+
+	Char literals are self-quoting.
+
+	Examples:
+
+	#\a    =>  #\a
+	#\A    =>  #\A
+	#\\40  =>  #\sp
+	#\sp   =>  #\sp
+
+
+	** BINDING FORMS ***********************************************
+
+	-- (DEF <VAR> EXPR) => UNSPECIFIC ------------------------------
+
+	Bind the value of EXPR to the variable <VAR>. DEF forms must
+	only appear in the following contexts:
+
+	- at the top level of a program
+	- in a PROG form that appears at the top level of a program
+	- at the beginning of the body of DEFUN
+
+	Examples:
+
+	(def foo 'bar)
+	(def 2^16 (expt 2 16))
+	(def square (lambda (x) (* x x)))
+
+
+	-- (DEFUN (<VAR> . <FORMALS>) EXPR1 EXPR2 ...) => UNSPECIFIC ---
+
+	The DEFUN form is an abbreviation for
+
+	(def <var> (lambda <formals> expr1 expr2 ...))
+
+	where <formals> is a formal argument list as specified in the
+	FORMAL SYNTAX section. Note that the dot in the above form only
+	serves to formalize the equivalence between DEF and DEFUN. You
+	would normally write
+
+	(defun (foo . (x y)) (bar x y))
+
+	as
+
+	(defun (foo x y) (bar x y))
+
+	although the former would also work.
+
+	The body of a function defined by DEFUN may contain nested
+	applications of DEF and DEFUN at its beginning. Such nested
+	occurrences will be translated to LABELS (q.v.).
+
+	Examples:
+
+	(defun (square x) (* x x))
+	(defun (compose f g) (lambda (x) (f (g x))))
+	(defun (sqsum . x) (fold + 0 (mapcar square x)))
+
+	(defun (length a)
+	  (defun (length2 a n)
+	    (if (null a)
+	        n
+	        (length2 (cdr a) (+ 1 n))))
+          (length2 a 0))
+
+
+	-- (LET ((<VAR1> <ARG1>) ...) EXPR1 EXPR2 ...) => OBJ ----------
+
+	Evaluate all arguments <ARGi> and then bind each argument to its
+	corresponding variable <VARi>. With these bindings in effect,
+	evaluate the given expressions EXPRi from the left to the right.
+	Return the value of the last EXPR. When LET has returned its
+	value, the bindings will no longer be in effect.
+
+	The last EXPR in LET is a tail position.
+
+	Formally,
+
+	(let ((v1 a1) (v2 a2) ...) x)
+
+	is equal to
+
+	((lambda (v1 v2 ...) x) a1 a2 ...)
+
+	Because of this equivalence, all variables <VARi> of LET must be
+	different. Because all <ARGi>s are evaluated before binding them
+	to their variables, arguments of LET cannot refer to variables
+	of LET. In cases where either of these restriction is not
+	acceptable, LET* should be used instead.
+
+	Examples:
+
+	(let ((a 1) (b 2)) (+ a b))          =>  3
+	(let ((x 'foo)) (let ((x 'bar)) x))  = > bar
+
+
+	-- (LET* ((<VAR1> <ARG1>) ...) EXPR1 EXPR2 ...) => OBJ ---------
+
+	Evaluate the first argument <ARG1> and bind it to the variable
+	<VAR1>. With this binding in effect, evaluate <ARG2> and bind it
+	to the variable <VAR2>. Proceed until all variables are bound to
+	arguments. With all of the above bindings in effect, evaluate
+	the given expressions and return the value of the last EXPR.
+
+	LET* differs from LET in two points:
+
+	- each argument <ARGi> can refer to any variable <VARj>
+	  given that j<i
+
+	- The <VAR>s do not have to be different
+
+	Therefore LET* can be used to write expressions that evaluate
+	like procedural programs, by evaluating the left to the right,
+	assigning a value to a variable in each step.
+
+	The last EXPR in LET* is a tail position.
+
+	Examples:
+
+	(let* ((x nil)
+	       (x (cons 'c x))
+	       (x (cons 'b x)))
+          (cons 'a x))             => (a b c)
+
+	(let* ((s "*foobar*")
+	       (k (ssize s))
+	       (k (- k 1))
+	       (s (substr s 1 k)))
+          s)                       => "foobar"
+
+
+	-- (LABELS ((<VAR1> <ARG1>) ...) EXPR1 EXPR2 ...) => OBJ -------
+
+	Bind each given <VARi> to an unspecific value and with these
+	bindings in effect, evaluate each argument <ARGi> and bind it
+	to its corresponding variable <VARi>. Arguments will be
+	evaluated and bound from the left to the right, so each
+	argument <ARGi> can refer to any <VARj> as long as j<i. The
+	following program is valid and evaluates to B:
+
+	(labels
+	  ((compose (lambda (f g) (lambda (x) (f (g x)))))
+	   (kadr    (compose car cdr)))
+	  (kadr '(a b c)))
+
+	Hence LABELS is a cross between Scheme's LETREC and LET* and
+	equal to what is sometimes referred to as LETREC*. This is
+	particularly interesting because nested DEF and DEFUN translate
+	to LABELS, so the following function would also be valid and
+	evaluate to "foobar":
+
+	                           |  ; Expanded form:
+	(defun (foobar)            |  (defun (foobar)
+	  (def x "foo")            |    (labels
+	  (def y (sconc x "bar"))  |      ((x "foo")
+	  y)                       |       (y (sconc x "bar")))
+                                   |      y))
+
+	Because LABELS binds values to variables in a context where
+	variable bindings are already established, it can define
+	functions that are mutually recursive. In this way it can be
+	though of a creating a local "top-level". Each function <ARGi>
+	defined by LABELS can refer to all <VARj> defined by the same
+	LABELS form without any restrictions.
+
+	The last EXPR in LABELS is a tail position.
+
+	Examples:
+
+	(labels
+	  ((pow (lambda (x y)
+	     (if (= 0 y)
+	         1
+	         (* x (pow x (- y 1)))))))
+          (pow 2 9))                            => 512
+
+	(labels
+	  ((even (lambda (n)
+	     (if (= 0 n) t (odd (- n 1)))))
+           (odd (lambda (n)
+	     (if (= 0 n) nil (even (- n 1))))))
+          (list (even 5) (odd 5)))              => (nil t)
+
+
+	-- (WITH ((<VAR1> <ARG1>) ...) EXPR1 EXPR2 ...) => OBJ ---------
+
+	Save the values of all <VAR>'s in temporary locations. Then
+	evaluate arguments <ARGi> sequentially, like LET*, but rather
+	than binding their values to new variables, alter pre-existing
+	variables using SETQ. With the modified bindings in effect,
+	evaluate the <EXPR>'s. Before returning the value of the last
+	expression, restore the original values of the <VAR>'s from the
+	temporary locations.
+
+	The variables <VARi> must exist prior to evaluating WITH.
+
+	WITH implements what is widely known as "dynamic scoping", i.e.
+	the WITH form alters the value of existing variables inside of
+	its dynamic extent:
+
+	(let ((a 'lexical))
+          (let ((f (lambda () a)))
+	    (with ((a 'dynamic))
+	      (f))))              =>  dynamic
+
+	Replacing the WITH in the above program by LET would result in
+	"lexical scoping", which is the default.
+
+	Examples:
+
+	(def *barchar* #\#)
+
+	(defun (plotbar n)
+	  (cond ((> n 0)
+	          (writec *barchar*)
+	          (plotbar (- n 1)))))
+
+	(plotbar 10)             ; prints ##########
+
+	(with ((*barchar* #\:))
+	  (plotbar 10))          ; prints ::::::::::
+
+
+	** FUNCTIONS AND FUNCTION APPLICATION **************************
+
+	-- (LAMBDA <FORMALS> EXPR1 ... EXPRn) => FUN -------------------
+
+	Create a function expecting the given formal arguments and
+	returning the value of EXPRn. <FORMALS> can be
+
+	- a list of variables
+	- a dotted list of variables
+	- a single variable
+
+	In the first case, when applying the function to some arguments,
+	there must be exactly one argument per variable and variables
+	will be bound to arguments pairwise. The list may be empty,
+	creating a function of no variables.
+
+	When <FORMALS> is a single variable, all arguments passed to the
+	function will be collected in a list and bound to that variable.
+
+	A dotted argument list is a cross between the above. First all
+	variables to the left of the dot will be bound to individual
+	arguments and then any remaining arguments will be collected in
+	a list and bound to the last variable.
+
+	The expressions EXPR1 ... EXPRn-1 are evaluated for effect from
+	the left to the right (i.e., the body of a function is an
+	implied PROG form). Only the value of EXPRn will be returned.
+
+	Examples:
+
+	(lambda (x y) (- y x))
+
+	(lambda (x . y)
+	  (apply princ x y)
+	  (apply terpri y)
+	  x)
+
+	(lambda x x)
+
+
+	-- APPLICATION -------------------------------------------------
+	-- (EXPR1 ...) => OBJ ------------------------------------------
+
+	Apply the function EXPR1 to some arguments and evaluate to the
+	value returned by that function. The number of expressions
+	passed to the function must match its number of formal arguments
+	(variables). See LAMBDA for details.
+
+	Examples:
+
+	((lambda (x) x) 1)           =>  1
+
+	((lambda (x y z)
+	 (list x y z)) 'a 'b 'c)     =>  (a b c)
+
+	((lambda () 'foo 'bar))      =>  bar
+
+	((lambda (x . y) y) 1 2 3))  =>  (2 3)
+
+
+	-- (APPLY EXPR1 EXPR2 ... EXPRn) => OBJ ------------------------
+
+	Apply the function EXPR1 to the arguments in EXPRn. EXPRn must
+	be a list. I.e.
+
+	(apply f x)  ==  (f . x)
+
+	Note that EXPRn will be evaluated before applying APPLY, but the
+	arguments of EXPR1 will not be evaluated, so
+
+	(apply cons '(a b))  =>  (a . b)
+
+	although A and B are not individually quoted.
+
+	When there are any expressions EXPR2 ... EXPRn-1 between the
+	function and its arguments, they will be consed to EXPRn before
+	applying EXPR1, i.e.:
+
+	     (apply princ x (list (errport)))
+	  == (apply princ (cons x (list (errport))))
+
+	Examples:
+
+	(apply cons '(a (b)))                   =>  (a b)
+
+	(apply mapcar list '((1 2 3) (4 5 6)))  =>  ((1 4) (2 5) (3 6))
+
+	(apply list 1 2 3 '(4 5))               =>  (1 2 3 4 5)
+
+
+	** CONDITIONAL EVALUATION **************************************
+
+	-- (AND EXPR1 ...)  => OBJ -------------------------------------
+	-- (OR EXPR1 ...)   => OBJ -------------------------------------
+	-- (PROG EXPR1 ...) => OBJ -------------------------------------
+
+	All of these forms evaluate their expressions from the left to
+	the right. PROG evaluates all of them and returns the value of
+	the last expression. The value of (PROG) is NIL.
+
+	AND evaluates expressions until one of them evaluates to NIL.
+	In this case it does not evaluate any subsequent expressions
+	and returns NIL immediately. When all expressions evaluate to
+	non-NIL values, it returns the value of the last expression.
+	AND implements the short-circuit logical "and". (AND) evaluates
+	to T, the neutral element of the and operation.
+
+	OR evaluates expressions until one of them evaluates to a
+	non-NIL value. In this case, it returns that value immediately
+	and does not evaluate any subsequent expressions. When all
+	expressions evaluate to NIL, it returns NIL. OR implements the
+	short-circuit logical "or". (OR) evaluates to NIL, the neutral
+	element of the "or" operation.
+
+	The last expression in each of these special forms is a tail
+	position.
+
+	Examples:
+
+	(and 1 2 3)   =>  3
+	(or 1 2 3)    =>  1
+	(prog 1 2 3)  =>  3
+
+	(and nil (div 1 0))  =>  nil
+	(or t (div 1 0))     =>  t
+
+	(let ((x #\5))
+	  (or (c<= #\0 x #\9)
+	      (c<= #\a x #\f)))  =>  t
+
+	(let ((x '(a b c)))
+	  (and (pair x)
+	       (pair (cdr x))
+	       (cadr x)))        =>  b
+
+
+	-- (IF EXPR1 EXPR2 EXPR3) => OBJ -------------------------------
+	-- (IF EXPR1 EXPR2)       => OBJ -------------------------------
+
+	First evaluate EXPR1. When the value of EXPR1 is not NIL,
+	evaluate EXPR2 and return its value. When EXPR1 is NIL and a
+	third expression is given, evaluate that expression and
+	return its value. When EXPR1 is NIL and no EXPR3 is present,
+	return NIL.
+
+	If EXPR1 is true (not NIL), EXPR3 (if present) will never be
+	evaluated. If EXPR1 is NIL, EXPR2 will never be evaluated.
+
+	Examples:
+
+	(if t 'yes 'no)     =>  yes
+	(if nil 'yes 'no)   =>  no
+	(if nil 'yes)       =>  nil
+
+	(if nil (div 1 0))  =>  nil
+
+
+	-- (IF* EXPR1 EXPR2) => OBJ ------------------------------------
+
+	First evaluate EXPR1. When EXPR1 is not NIL, return its value.
+	When EXPR1 is NIL, evaluate EXPR2 and return its value. When
+	EXPR1 is not NIL, EXPR2 will never be evaluates. EXPR1 will
+	only be evaluated once. Formally,
+
+	(if* a b)
+
+	is equivalent to
+
+	(let ((g a)) (if g g b))
+
+	Rationale: IF* is trivial to implement and useful for
+	implementing derived forms, such as OR and COND. The
+	relationship between IF and IF* becomes obvious in the
+	following disassembled code:
+
+	; (if 1 2)       ; (if* 1 2)
+	0 (quote 1)      0 (quote 1)    ; load A with 1
+	2 (brf 6)        2 (brt 6)      ; branch on false / true
+	4 (quote 2)      4 (quote 2)    ; load A with 2
+	6                6              ; result in A
+
+	Examples:
+
+	(if* 1 2)    =>  1
+	(if* nil 2)  =>  2
+
+	(if* (memq 'c '(a b c d e f)) 'no)  =>  (c d e f)
+
+
+	-- (COND <CLAUSE> ...) => OBJ ----------------------------------
+
+	Each <clause> has one of the following forms:
+
+	(<predicate> EXPR1 EXPR2 ...)
+	(<predicate>)
+	(<predicate> => FUN^1)
+
+	The COND form first evaluates the predicate of the first clause.
+	When it evaluates to a non-NIL value, the rest of the clause
+	will be evaluated and otherwise the next clause will be tried.
+	When COND runs out of clauses, it will return an unspecific
+	value.
+
+	The evaluation of the rest of a clause depend on the shape of
+	the clause. When there are some expressions following the
+	predicate, they will be evaluated from the left to the right
+	(like in PROG) and the value of the last of them will be
+	returned.
+
+	When there is only a predicate in the clause, the value of the
+	predicate will be returned.
+
+	When the second member of the clause is a double right arrow,
+	the third member must be a function of one argument. That
+	function will be applied to the predicate and the value of the
+	function will be the value of the entire COND form.
+
+	In either of the three cases, no more clauses will be evaluated
+	after finding one with a true (non-NIL) predicate.
+
+	The last clause of COND may have the form ELSE, introducing a
+	catch-all clause whose predicate is always true.
+
+	The last expression in every clause of COND is a tail position.
+	This does not apply to predicate-only clauses, though.
+
+	position.
+
+	Examples:
+
+	(cond (t 1) (t 2))    =>  1
+	(cond (nil 1) (t 2))  =>  2
+
+	(let ((c #\*))
+	  (cond ((c<= #\0 c #\0) 'digit)
+	        ((c<= #\a c #\z) 'letter)
+	        (else            'unknown)))  =>  unknown
+
+	(cond ('true))  =>  true
+
+	(cond ((assq 'b '((a 1) (b 2) (c 3))) => cdr))  =>  (2)
+
+
+	-- (CASE <KEY> <CLAUSE> ...) => OBJ ----------------------------
+
+	Each <clause> has the following form:
+
+	((<member> ...) EXPR1 ...)
+
+	First the <key> is evaluated, which must be an expression that
+	evaluates to T, nil, a symbol, a number, or a character. The
+	value of <key> is then compared to each member of the first
+	<clause> (using MEMV). When <key> is contained in the list of
+	members, the corresponding EXPRs will be evaluated and the value
+	of the last expression is returned. Otherwise CASE will continue
+	to test clauses from the left. When no clause has <key> as a
+	member, CASE will return an unspecific result.
+
+	<Key> is only evaluated once, so
+
+	(case (print 'FOO) ((a)) ((b)) ((c)))
+
+	will only print FOO once.
+
+	The last <clause> may have the keyword ELSE in the place of its
+	member list. In this case, the expressions of that clause will
+	be evaluated when no other clause matches.
+
+	The last expression in every clause of CASE is a tail position.
+
+	Examples:
+
+	(case 'b ((a) 1) ((b) 2) ((c) 3))  =>   2
+
+	(case 5
+	  ((0 2 4 6 8) 'even)
+	  ((1 3 5 7 9) 'odd)
+	  (else        'not-a-digit))      =>  odd
+
+
+	** LOOPS  ******************************************************
+
+	-- (DO <BINDINGS> (<TEST> EXPR1 ...) <BODY>) => OBJ ------------
+
+	<Bindings> is similar to the bindings of LET, but each clause
+	has an optional third argument, so it may have the following
+	forms:
+
+	((<var1> <arg1>) ...)
+	((<var1> <arg1> <update1>) ...)
+
+	DO implements a loop, <TEST> is the exit condition of the loop,
+	and <BODY> is a set of expressions that will be evaluated in
+	each iteration of the loop.
+
+	DO first evaluates all <arg>'s and binds the resulting values to
+	the corresponding variables, just like LET. With these bindings
+	in effect, it evaluates <TEST>. When the value of <TEST> is NIL,
+	it evaluates the expressions following <TEST> from the left to
+	the right and returns the value of the last of them.
+
+	When <TEST> evaluates to NIL, <BODY> is evaluated. <BODY> is a
+	sequence of expressions that will evaluated from the left to
+	the right. After evaluating the expressions, all <update>'s will
+	be evaluates and their values will be bound to the corresponding
+	<var>'s. With these bindings in effect, DO will start over with
+	evaluating <TEST>.
+
+	<Update> is often used to increment or decrement a numeric value
+	or collect values in a list, but in fact <update> can be any
+	expression, it does not even have to reference the corresponding
+	variable.
+
+	The last expression in <BODY> is a tail position.
+
+	Examples:
+
+	(do ((i 32 (+ 1 i)))
+	    ((= 127 i) (terpri))
+	  (writec (char i)))      ; writes the ASCII alphabet
+
+	(do ((i  10 (- i 1))
+	     (a nil (cons i a)))
+	    ((= 0 i) a))          =>  (1 2 3 4 5 6 7 8 9 10)
+
+	(do () (nil))             ; never terminates
+
+
+	-- (LET <NAME> ((<VAR1> <ARG1>) ...) EXPR1 EXPR2 ...) => OBJ ---
+
+	The "named LET" is a very general loop construct. It binds its
+	variables to arguments in the same was as LET does, but instead
+	of evaluating its body immediately, it creates a function <NAME>
+	with all <VAR>s as variables and (PROG EXPR1 EXPR2 ...) as its
+	body. It then applies this function to the given <ARG>s.
+
+	As long as no EXPR applies <NAME>, named LET behaves in the same
+	way as LET, but when <NAME> is applied to some values in the
+	body of named LET, then the body of named LET will be reentered
+	with the new values as arguments. The loop is exited by just
+	evaluating to a value (and not applying <NAME>).
+
+	The last EXPR in LET is a tail position.
+
+	Examples:
+
+	(let loop ((i 0))
+	  (cond ((= 127 i) (terpri))
+	        (else
+	          (writec (char i))
+	          (loop (+ 1 i)))))   ; writes the ASCII alphabet
+
+	(let loop ((a '(1 2 3 4 5))
+	           (e nil))
+          (cond ((null a) e)
+	        ((evenp (car a))
+	          (loop (cdr a)
+	                (cons (car a) e)))
+	        (else
+	          (loop (cdr a) e))))       =>  (4 2)
+
+
+	** QUOTATION ***************************************************
+
+	-- (QUOTE EXPR) => OBJ -----------------------------------------
+
+	Return EXPR without evaluating it. The form (quote expr) may be
+	abbreviated as
+
+	'expr
+
+	List and vector structures returned by QUOTE will be immutable,
+	so modifying them with SSET, SETCAR, VFILL, etc, will result
+	in an error.
+
+	Applying QUOTE to a self-quoting object will not add another
+	level of quotation, e.g. (quote 123) is the same as 123.
+	However, (quote (quote 123)) will yield (quote 123).
+
+	Example:
+
+	'foo         =>  foo
+	''foo        =>  'foo
+	'(1 2 3)     =>  (1 2 3)
+	'(cons a b)  =>  (cons a b)
+
+
+	-- (QQUOTE <TEMPLATE>) => OBJ ----------------------------------
+	-- (UNQUOTE EXPR) ----------------------------------------------
+	-- (SPLICE EXPR) -----------------------------------------------
+
+	QQUOTE ("quasi-quote") creates an (often nested) list or vector
+	structure from a template. The QUOTE, UNQUOTE, and SPLICE forms
+	can be abbreviated as follows:
+
+	`x   ==  (qquote x)   ; ` is a backtick (ASCII 96) character
+	@x   ==  (qquote x)
+	,x   ==  (nqquote x)
+	,@x  ==  (splice x)
+
+	When the template is just an ordinary list or vector, QQUOTE
+	is similar to QUOTE, but the resulting object will be mutable.
+	E.g.
+
+	(setcdr @(1 . 0) 2)  =>  (1 . 2)
+
+	The <template> may contain applications of the UNQUOTE or SPLICE
+	special forms, which can be used to insert dynamic values into
+	otherwise static structures. (Unquote expr) "unquotes" the given
+	expression and inserts its value, rather than its lexical form,
+	into the resulting structure. For instance:
+
+	@(1 ,(+ 1 1) 3)  =>  (1 2 3)
+
+	(Splice expr) also unquotes the given expression, but splices it
+	into the surrounding structure:
+
+	@(1  ,(list 2 3) 4)  =>  (1 (2 3) 4)
+	@(1 ,@(list 2 3) 4)  =>  (1 2 3 4)
+
+	Generally, the following equations hold:
+
+	    @x  ==  'x
+	   @,x  ==  x
+	  @(x)  ==  (cons 'x nil)
+	 @(,x)  ==  (cons x nil)
+	@(,@x)  ==  (conc x nil)  ; Note: CONC instead of CONS
+
+	The following combinations of QQUOTE and SPLICE are undefined:
+
+	(qquote ((splice atom)))  ; splicing a non-list into a list
+	(qquote (splice expr))    ; splicing something into a non-list
+
+	When a <template> is (or contains) a vector rather than a list,
+	the vector will be built in the same way as a list and only
+	subsequently concerted to a vector:
+
+	@#(1 ,(+ 1 1))  ==  (listvec (cons 1 (cons (+ 1 1) nil)))
+
+	QQUOTE is often used to create LISP forms inside of macros.
+
+	Examples:
+
+	@(5 * 7 = ,(* 5 7))     =>  (5 * 7 = 35)
+
+	@#(a ,@(list 'b 'c) d)  =>  #(a b c d)
+
+	(let ((p '(= 1 1))
+	      (x '((prog
+	            (princ "true")
+	            (terpri)))))
+          @(if ,p ,@x))            =>  (if (= 1 1)
+	                                   (prog (princ "true")
+	                                         (terpri)))
+
+
+	** LIST FUNCTIONS **********************************************
+
+	-- (ASSOC EXPR ALIST) => PAIR ----------------------------------
+	-- (ASSQ EXPR ALIST)  => PAIR ----------------------------------
+	-- (ASSV EXPR ALIST)  => PAIR ----------------------------------
+
+	Search the given ALIST sequentially, from left to right, for a
+	member with EXPR in its car field. When such a member exists,
+	return it, otherwise return NIL.
+
+	ASSOC uses EQUAL to identify members, ASSV uses EQV, and ASSQ
+	uses EQ.
+
+	Examples:
+
+	(assoc '(3 4) '(((1 2)) ((3 4)) ((5 6))))  =>  ((3 4))
+	(assv 2 '((1 foo) (2 bar) (3 baz)))        =>  (2 bar)
+	(assq 'b '((a 1) (b 2) (c 3)))             =>  (b 2)
+	(assq 'x '((a 1) (b 2) (c 3)))             =>  nil
+
+
+	-- (ATOM EXPR) => T/NIL ----------------------------------------
+
+	Return T, ifthe given EXPR is an atom (i.e.: not a list).
+
+	Examples:
+
+	(atom nil)       =>  t
+	(atom 123)       =>  t
+	(atom #(1 2 3))  =>  t
+	(atom '(1))      =>  nil
+
+	-- (CAAR PAIR)   => OBJ ----------------------------------------
+	-- (CDDDDR PAIR) => OBJ ----------------------------------------
+
+	Return a member of a nested list (pair, in fact) by repeatedly
+	applying CAR and CDR to the list. The letters between the 'C'
+	and the 'R' of the function names indicate the operations CAR
+	and CDR, respectively. For instance,
+
+	(caddr x)  equals  (car (cdr (cdr x)))
+
+	The functions CADR, CADDR, and CADDDR are used pretty frequently.
+	They extract the first, second, and third member of a list.
+	Analogously, CDDR, CDDDR, and CDDDDR return the corresponding
+	tails of a list.
+
+	Examples:
+
+	(caar '((a b) (c d)))   =>  a
+	(cadr '((a b) (c d)))   =>  (c d)
+	(cdar '((a b) (c d)))   =>  (b)
+	(cddr '((a b) (c d)))   =>  nil
+	(cadar '((a b) (c d)))  =>  b
+
+
+	-- (CAR PAIR) => OBJ -------------------------------------------
+	-- (CDR PAIR) => OBJ -------------------------------------------
+
+	CAR extracts the car part and CDR extracts the CDR part of a
+	pair. The application of CAR or CDR to NIL is an error.
+
+	Examples:
+
+	(car '(a . b))  =>  a
+	(cdr '(a . b))  =>  b
+	(car '(a b c))  =>  a
+	(cdr '(a b c))  =>  (b c)
+
+
+	-- (CONC LIST ... EXPR)  => DLIST ------------------------------
+	-- (NCONC LIST ... EXPR) => DLIST ------------------------------
+
+	Concatenate lists: return a list that contains the elements of
+	the first LIST argument followed by the elements of the second
+	argument, etc. The last list to be appended may be a dotted
+	list.
+
+	CONC returns a fresh list while NCONC may modify its arguments
+	in situ. Hence CONC can work on constant (quoted) lists, which
+	NCONC cannot (the OBJ argument may in fact be immutable).
+
+	When no arguments are passed to these functions, both of them
+	return NIL.
+
+	Examples:
+
+	(conc '(1 2 3) '(4 5 6))  =>  (1 2 3 4 5 6)
+	(conc '(1 2 3) 4)         =>  (1 2 3 . 4)
+	(conc nil '(a b) nil)     =>  (a b)
+	(conc '(a) '(b c) '(d))   =>  (a b c d)
+
+	(nconc (list 1 2 3) '(4 5 6))  =>  (1 2 3 4 5 6)
+
+	(nconc)  =>  nil
+
+
+	-- (CONS EXPR1 EXPR2) => PAIR ----------------------------------
+
+	Create a fresh pair with EXPR1 in its car and EXPR2 in its cdr
+	part. The pair is guaranteed to be different from all pairs
+	created before or after it, so EQ can be used to identify it.
+	I.e.:
+
+	(eq (cons 'a 'b) (cons 'a 'b))  =>  nil
+
+	Examples:
+
+	(cons 'a 'b)        =>  (a . b)
+	(cons 'a '(b c))    =>  (a b c)
+	(cons "foo" "bar")  =>  ("foo" . "bar")
+
+
+	-- (FILTER FUN^1 LIST) => LIST ---------------------------------
+
+	Return a fresh list containing those elements X of LIST that
+	satisfy the predicate P, i.e. for which (P X) => T.
+
+	Examples:
+
+	(filter (lambda (x) t) '(a b c))  =>  (a b c)
+
+	(filter oddp '(1 2 3 4 5))        =>  (1 3 5)
+
+
+	-- (FOLD FUN^2 EXPR LIST)  => OBJ ------------------------------
+	-- (FOLDR FUN^2 EXPR LIST) => OBJ ------------------------------
+
+	Fold function FUN^2 over the given list and return the result.
+	EXPR is the neutral element or base element of FUN. "Folding"
+	a function FUN over a list means to combine two elements of the
+	list by applying FUN to them and then combine the (intermediate)
+	result with the next element, etc. FOLD folds elements
+	left-associatively and FOLDR combines them right-associatively.
+
+	Formally,
+
+	(fold  f 0 '(a1 ... aN))  ==  (f ... (f (f 0 a1) a2) ... aN)
+	(foldr f 0 '(a1 ... aN))  ==  (f a1 (f a2 ... (f aN 0) ...))
+
+	Examples:
+
+	(fold cons 0 '(a b c))   =>  (((0 . a) . b) . c)
+	(foldr cons 0 '(a b c))  =>  (a b c . 0)
+
+	(fold * 1 '(1 2 3 4))    =>  24  ; (((1 * 2) * 3) * 4)
+	(foldr - 0 '(1 2 3 4))   =>  -2  ; (1 - (2 - (3 - 4)))
+
+
+	-- (MAPCAR FUN LIST1 LIST2 ...)  => LIST -----------------------
+	-- (FOREACH FUN LIST1 LIST2 ...) => UNSPECIFIC -----------------
+
+	Map fun over the given lists, resulting in a fresh list which
+	contains the results of applying FUN to the corresponding
+	elements of the argument lists LIST1, LIST2, etc. Formally,
+
+	(mapcar f (a1 ... aN))  ==  (list (f a1) (f a2) ... (f aN))
+
+	and
+
+	(mapcar f (a1 ... aN) (b1 ... bN))  ==  (list (f a1 b1) ...
+	                                              (f a2 b2)
+	                                              (f aN bN))
+
+	So FUN has to be unary when one list is given, binary, when two
+	lists are given, etc. Any number of lists may be specified. When
+	the lengths of the lists differ, MAPCAR will stop mapping as
+	soon as the shortest list runs out of members.
+
+	FOREACH is like MAPCAR, but applies FUN for effect and returns
+	an unspecific value. Also FOREACH is guaranteed to traverse
+	its list arguments from the left to the right, which MAPCAR
+	is not.
+
+	Examples:
+
+	(mapcar list '(a b c) '(1 2 3))     =>  ((a 1) (b 2) (c 3))
+	(mapcar + '(1 2 3) '(4 5 6))        =>  (5 7 9)
+	(mapcar list '(a b) '(1 2) '(x y))  =>  ((a 1 x) (b 2 y))
+
+
+	-- (LENGTH LIST) => FIXNUM -------------------------------------
+
+	Return the length of the given list.
+
+	Examples:
+
+	(length nil)       =>  0
+	(length '(a b c))  =>  3
+
+
+	-- (LIST EXPR ...) => LIST -------------------------------------
+
+	Create a fresh list from the given arguments. The list is
+	guaranteed to be unique. See CONS.
+
+	Examples:
+
+	(list)                   =>  nil
+	(list 'a (+ 1 2) "foo")  =>  (a 3 "foo")
+
+
+	-- (LISTP EXPR) => T/NIL ---------------------------------------
+
+	Return T, if the given argument is a (non-dotted) list. When
+	EXPR is a dotted list, a graph (a cyclic list) or not a list
+	at all, return NIL.
+
+	LISTP need O(n) time to check its argument. In order to find
+	out whether a given EXPR is any list type at all, use
+
+	(or (pair EXPR) (null EXPR))
+
+	Examples:
+
+	(listp nil)         =>  t
+	(listp '(1 2 3))    =>  t
+	(listp '(1 2 . 3))  =>  nil
+
+	(let ((x (list 1)))
+	  (setcdr x x)
+	  (listp x))        =>  nil
+
+
+	-- (MEMBER EXPR LIST) => LIST ----------------------------------
+	-- (MEMQ EXPR LIST)   => LIST ----------------------------------
+	-- (MEMV EXPR LIST)   => LIST ----------------------------------
+
+	Search the given LIST sequentially, from left to right, for a
+	member that is equal to EXPR. When such a member exists, return
+	the tail of LIST that starts with that member. Return NIL if
+	no such member exists.
+
+	MEMBER uses EQUAL to identify members, MEMV uses EQV, and MEMQ
+	uses EQ.
+
+	Examples:
+
+	(member '(3 4) '((1 2) (3 4) (5 6)))  =>  ((3 4) (5 6))
+	(memv 3 '(1 2 3 4 5))                 =>  (3 4 5)
+	(memq 'b '(a b c d e f))              =>  (b c d e f)
+	(memq 'x '(a b c d e f))              =>  nil
+
+
+	-- (NTH FIXNUM LIST)       => OBJ ------------------------------
+	-- (NTH-TAIL FIXNUM DLIST) => OBJ ------------------------------
+
+	NTH returns the N'th member of the given list, and NTH-TAIL
+	returns the tail of LIST that begins after the N-1'st member.
+	The first element is at position 0. Hence FIXNUM must be less
+	than the length of the list in NTH and not greater than the
+	length of the list in NTH-TAIL.
+
+	Examples:
+
+	(nth 0 '(a b c))  =>  a
+	(nth 2 '(a b c))  =>  c
+
+	(nth-tail 1 '(a b c))  =>  (b c)
+	(nth-tail 2 '(a b c))  =>  (c)
+	(nth-tail 3 '(a b c))  =>  nil
+
+
+	-- (NULL EXPR) => T/NIL ----------------------------------------
+
+	Return T, if the given EXPR is NIL. Although this function is
+	extensionally equal to NOT, its application is different: it
+	is used to test whether EXPR denotes the end of a LIST.
+
+	Examples:
+
+	(null 'foo)          =>  nil
+	(null '(foo))        =>  nil
+	(null (cdr '(foo)))  =>  t
+
+
+	-- (RECONC LIST EXPR)  => DLIST --------------------------------
+	-- (NRECONC LIST EXPR) => DLIST --------------------------------
+
+	Reverse LIST and concatenate it to EXPR. Formally,
+
+	(reconc a b)  ==  (nconc (reverse a) b)
+
+	RECONC creates a fresh list while NRECONC may modify the given
+	list in situ. Hence RECONC can operate on immutable lists, which
+	NRECONC cannot do. NRECONC does not allocate any cons cells.
+
+	Examples:
+
+	(reconc '(c b a) '(d e f))       =>  (a b c d e f)
+	(reconc '(c b a) 'd)             =>  (a b c . d)
+
+	(nreconc (list 3 2 1) '(4 5 6))  =>  (1 2 3 4 5 6)
+
+
+	-- (REVER LIST)  => LIST ---------------------------------------
+	-- (NREVER LIST) => LIST ---------------------------------------
+
+	Return LIST with its elements in reverse order. REVER creates a
+	fresh list while NREVER modifies the given list in situ. Hence
+	REVER can reverse immutable lists, which NREVER cannot do.
+
+	Note that the effect of NREVER on a list bound to a variable may
+	be unexpected:
+
+	(let ((a (list 'a 'b 'c)))
+	  (nrever a)
+	  a)          =>  (a)
+
+	Hence the variable should always be updated with the value
+	returned by NREVER:
+
+	(let ((a (list 'a 'b 'c)))
+	  (setq a (nrever a))
+	  a)                   =>  (c b a)
+
+	REVER is called REVER, because "rever" is the REVER of "rever".
+
+	Examples:
+
+	(rever nil)            =>  nil
+	(rever '(1 2 3))       =>  (3 2 1)
+	(nrever (list 1 2 3))  =>  (3 2 1)
+
+
+	** MUTATION ****************************************************
+
+	-- (SETQ <VAR> EXPR) => OBJ ------------------------------------
+
+	Set the variable <VAR> to the value of EXPR. The variable must
+	have been defined before, either be DEF or LAMBDA or one of
+	their derived forms.
+
+	Examples:
+
+	(prog (def foo 'zzz)
+	      (setq foo 'bar)
+	      foo)             =>  bar
+
+
+	-- (SETCAR PAIR EXPR) => PAIR ----------------------------------
+	-- (SETCDR PAIR EXPR) => PAIR ----------------------------------
+
+	Replace the car/cdr part of the given pair by EXPR. No new pair
+	will be allocated, the existing one will be modified in situ. The
+	pair must be mutable. SETCAR replaces the car part and SETCDR
+	replaces the cdr part of a pair. Both functions return the new
+	pair.
+
+	Note that SETCAR and SETCDR can be used to create cyclic
+	structures.
+
+	Examples:
+
+	(setcar (list 'f 'o 'o) 'g)       =>  (g o o)
+	(setcdr (cons 1 nil) '(2 3 4 5))  =>  (1 2 3 4 5)
+
+	(let ((x (list 1)))
+	  (setcdr x x))     =>  (1 1 1 ...)  ; will print forever
+
+
+	** EQUIVALENCE *************************************************
+
+	-- (EQ EXPR1 EXPR2) => T/NIL -----------------------------------
+
+	Return T, if EXPR1 and EXPR2 are the same object. This is the
+	case, if
+
+	- EXPR1 and EXPR2 are both T
+	- EXPR1 and EXPR2 are both NIL
+	- EXPR1 and EXPR2 are the same symbol
+	- EXPR1 and EXPR2 are the same function
+	- EXPR1 and EXPR2 have been returned by the same function
+	  application
+
+	EQ evaluates to NIL, if its arguments have different types.
+
+	EQ is guaranteed to evaluate to NIL when applied to the values
+	of two different applications of CONS, even when applied to the
+	same arguments. See CONS.
+
+	An applications of EQ to pairs (and hence lists), chars, strings,
+	and vectors is undefined. The case
+
+	(eq (lambda (x) x) (lambda (x) x))
+
+	is undefined.
+
+	Examples:
+
+	(eq nil nil)    =>  t
+	(eq 'foo 'foo)  =>  t
+	(eq 'foo 'bar)  =>  nil
+
+	(eq 'foo 17)    =>  nil
+
+	(eq car car)    =>  t
+
+	(let ((x (cons 'x nil)))
+	  (eq x x))               =>  t
+
+	(eq (cons 'x nil)
+	    (cons 'x nil))        =>  nil
+
+
+	-- (EQV EXPR1 EXPR2) => T/NIL ----------------------------------
+
+	Return T, if EXPR1 and EXPR2 have the same value. This is the
+	case, if
+
+	- EXPR1 and EXPR2 are both fixnums and have the same value
+	- EXPR1 and EXPR2 are both chars and denote the same character
+	- EXPR1 and EXPR2 are the same object in the sense of EQ
+
+	EQV evaluates to NIL, if its arguments have different types.
+
+	An application of EQV to pairs (and hence lists) and vectors is
+	undefined.
+
+	Examples:
+
+	(eqv 1 1)        =>  t
+	(eqv 1 2)        =>  nil
+	(eqv #\a #\a)    =>  t
+	(eqv #\a #\b)    =>  nil
+
+	(eqv 27 "test")  =>  nil
+
+	(eqv eqv eqv)    =>  t
+
+
+	-- (EQUAL EXPR1 EXPR2) => T/NIL --------------------------------
+
+	Return T, if EXPR1 and EXPR2 are structurally equal. This is the
+	case, if
+
+	- Both EXPR1 and EXPR2 are pairs and their car and cdr
+	  parts are equal in the sense of EQUAL
+
+	- Both EXPR1 and EXPR2 are vectors of equal length and
+	  their elements are pairwise equal in the sense of EQUAL
+
+	- Both EXPR1 and EXPR2 are strings that are equal in the
+	  sense of S=
+
+	- EXPR1 and EXPR2 are equivalent in the sense of EQV
+
+	Informally, EQUAL returns T for two objects, if those objects
+	look the same when printed by PRIN.
+
+	Examples:
+
+	(equal '(1 (2) 3) '(1 (2) 3))  =>  t
+	(equal '(1 (2) 3) '(1 (X) 3))  =>  nil
+
+	(equal "foo" "foo")            =>  t
+	(equal #(a (b) c) #(a (b) c))  =>  t
+	(equal (a #(b) c) (a #(b) c))  =>  t
+
+
+	** TYPE PREDICATES *********************************************
+
+	-- (CHARP EXPR)   => T/NIL -------------------------------------
+	-- (CTAGP EXPR)   => T/NIL -------------------------------------
+	-- (INPORTP X)    => T/NIL -------------------------------------
+	-- (FIXP X)       => T/NIL -------------------------------------
+	-- (FUNP EXPR)    => T/NIL -------------------------------------
+	-- (OUTPORTP X)   => T/NIL -------------------------------------
+	-- (PAIR EXPR)    => T/NIL -------------------------------------
+	-- (STRINGP EXPR) => T/NIL -------------------------------------
+	-- (SYMBOLP EXPR) => T/NIL -------------------------------------
+	-- (VECTORP EXPR) => T/NIL -------------------------------------
+
+	The type predicates return T, if the argument passed to them
+	has the corresponding type. For instance, FIXP returns T, if
+	its argument is a fixnum and SYMBOLP returns T, if its argument
+	is a symbol.
+
+	Note that LIST is not a primitive type, but a concatenation of
+	pairs, hence LISTP is not a type predicate. Nor is NULL a type
+	predicate, because NIL is a unique object with no type.
+
+	Examples:
+
+	(charp #\x)                     =>  t
+	(ctagp (catch (lambda (x) x)))  =>  t
+	(inportp (inport))              =>  t
+	(fixp 123)                      =>  t
+	(funp (lambda (x) x))           =>  t
+	(outportp (errport))            =>  t
+	(pair '(1 2 3))                 =>  t
+	(stringp "hello!")              =>  t
+	(symbolp 'foo)                  =>  t
+	(vectorp #(a b c d e f))        =>  t
+
+
+	** TYPE CONVERSION *********************************************
+
+	-- (CHAR FIXNUM)  => CHAR --------------------------------------
+	-- (CHARVAL CHAR) => FIXNUM ------------------------------------
+
+	CHAR return a character with the given code point. The code
+	point must be given as a fixnum between 0 and 255. CHARVAL
+	returns the code point of a given character as a fixnum.
+
+	Examples:
+
+	(char 65)      =>  #\A
+	(charval #\A)  =>  65
+
+
+	-- (LISTSTR LIST)   => STRING ----------------------------------
+	-- (STRLIST STRING) => LIST ------------------------------------
+
+	LISTSTR returns a fresh string containing the same characters as
+	the given list, in the same order. STRLIST returns a fresh list
+	containing the same characters as the given string, in the same
+	order.
+
+	Examples:
+
+	(liststr nil)             =>  ""
+	(liststr '(#\f #\o #\b))  =>  "fob
+
+	(strlist "")     =>  nil
+	(strlist "fob")  =>  (#\f #\o #\b)
+
+
+	-- (LISTVEC LIST)   => VECTOR ----------------------------------
+	-- (VECLIST VECTOR) => LIST ------------------------------------
+
+	LISTVEC returns a fresh vector containing the same objects as
+	the given list, in the same order. VECLIST returns a fresh list
+	containing the same objects as the given vector, in the same
+	order.
+
+	(listvec nil)       =>  #()
+	(listvec '(a b c))  =>  #(a b c)
+
+	(veclist #())       =>  nil
+	(veclist #(a b c))  =>  (a b c)
+
+
+	-- (SYMBOL STRING)  => SYMBOL-----------------------------------
+	-- (SYMNAME SYMBOL) => STRING ----------------------------------
+
+	SYMBOL creates a new symbol whose name consists of the
+	characters given in STRING. Note that SYMBOL can create symbols
+	that will result in invalid forms when printed and/or cannot be
+	read by the reader. E.g.:
+
+	(symbol ")")    ; will create an extra right paren when printed
+	(symbol "Foo")  ; the reader will fold letters to lower case
+	(symbol "a b")  ; the reader will read two symbols
+	(symbol "@")    ; @ is a reserved symbol
+	(symbol "t")    ; T is a special object
+
+	SYMNAME returns a string containing the name of the given symbol.
+
+	Examples:
+
+	(symbol "foo")               =>  foo
+	(symbol "(don't do this!)")  =>  (don't do this!)
+
+	(symname 'FOO)            =>  foo
+	(symname (symbol "Foo"))  =>  Foo
+
+
+	** ARITHMETIC FUNCTIONS ****************************************
+
+	-- (* N1 ...) => FIXNUM ----------------------------------------
+
+	Return the product of the given fixnums. When no arguments are
+	given, return the neutral element of the multiply operation.
+	(* x) => x for any X.
+
+	When the result of the operation does not fit in a fixnum, an
+	error will be signalled.
+
+	Examples:
+
+	(*)        =>  1
+	(* 5)      =>  5
+	(* 2 3 4)  =>  24
+
+
+	-- (+ N1 ...) => FIXNUM ----------------------------------------
+
+	Return the sum of the given fixnums. When no arguments are
+	given, return the neutral element of the plus operation.
+	(+ x) => x for any X.
+
+	When the result of the operation does not fit in a fixnum, an
+	error will be signalled.
+
+	Examples:
+
+	(+)        =>  0
+	(+ 5)      =>  5
+	(+ 2 3 4)  =>  9
+
+
+	-- (- N1 N2 ...) => FIXNUM -------------------------------------
+
+	Return the different between the given fixnums. When only one
+	argument is specified, returns its negative value. Note that
+	on two's complement machines, there may be values that do not
+	have any negative counterpart. When applying - to such a value,
+	an error will be signalled.
+
+	The - function associates to the left, i.e.
+
+	(- a b c)  ==  (- (- a b) c)
+
+	When the result of the operation does not fit in a fixnum, an
+	error will be signalled.
+
+	Examples:
+
+	(- 5)      =>  -5
+	(- 3 2)    =>  1
+	(- 1 2 3)  =>  -4
+
+
+	-- (= N1 N2 ...)  => T/NIL -------------------------------------
+	-- (< N1 N2 ...)  => T/NIL -------------------------------------
+	-- (> N1 N2 ...)  => T/NIL -------------------------------------
+	-- (<= N1 N2 ...) => T/NIL -------------------------------------
+	-- (>= N1 N2 ...) => T/NIL -------------------------------------
+
+	These predicates return T, if their fixnum arguments are
+
+	- equal (=)
+	- in strictly increasing order (<)
+	- in strictly decreasing order (>)
+	- in monotonically increasing order (<=)
+	- in monotonically decreasing order (>=)
+
+	They are trivially true when applied to a single argument.
+
+	Examples:
+
+	(= 1 1 1)   =>  t
+	(< 1 2 3)   =>  t
+	(> 3 2 1)   =>  t
+	(<= 1 2 2)  =>  t
+	(>= 3 3 2)  =>  t
+
+	(= 0)  =>  t
+	(< 5)  =>  t
+
+
+	-- (ABS FIXNUM) => FIXNUM --------------------------------------
+
+	Return the magnitude of the given fixnum. Note that on two's
+	complement machines there may exist negative values with a
+	negative magnitude. When applying ABS to such a value, an error
+	will be signalled.
+
+	Examples:
+
+	(abs 5)   =>  5
+	(abs -5)  =>  5
+
+
+	-- (ASRB N1 N2 N3 ...)       => FIXNUM -------------------------
+	-- (BITOP <OP> N1 N2 N3 ...) => FIXNUM -------------------------
+	-- (ANDB N1 N2 N3 ...)       => FIXNUM -------------------------
+	-- (EQVB N1 N2 N3 ...)       => FIXNUM -------------------------
+	-- (NANDB N1 N2 N3 ...)      => FIXNUM -------------------------
+	-- (NORB N1 N2 N3 ...)       => FIXNUM -------------------------
+	-- (NOTB FIXNUM)             => FIXNUM -------------------------
+	-- (ORB N1 N2 N3 ...)        => FIXNUM -------------------------
+	-- (SHLB N1 N2 N3 ...)       => FIXNUM -------------------------
+	-- (SHRB N1 N2 N3 ...)       => FIXNUM -------------------------
+	-- (XORB N1 N2 N3 ...)       => FIXNUM -------------------------
+
+	BITOP implements the bitwise operators summarized in the below
+	table. The operation itself is passed to BITOP in the <OP>
+	argument, which must also be a fixnum. The remaining fixnums
+	are combined using the corresponding operator. All operations
+	associate to the left, e.g.
+
+	(bitop 16 1 2 3 4)  =>  512  ; ((1 shl 2) shl 3) shl 4
+
+	The values for <OP> are derived from the following table:
+
+	                  | AB AB AB AB |
+	Operation         | 00 01 10 11 | Op | Notes
+	-------------------------------------------------------------
+	0                 |  0  0  0  0 |  0 | Aways 0 (Clear)
+	(ANDB A B)        |  0  0  0  1 |  1 | ANDB
+	(ANDB A (NOTB B)) |  0  0  1  0 |  2 |
+	A                 |  0  0  1  1 |  3 |
+	(ANDB (NOTB A) B) |  0  1  0  0 |  4 |
+	B                 |  0  1  0  1 |  5 |
+	(XORB A B)        |  0  1  1  0 |  6 | XORB
+	(ORB A B)         |  0  1  1  1 |  7 | ORB (Inclusive)
+	(NOTB (ORB A B))  |  1  0  0  0 |  8 | NORB
+	(NOTB (XORB A B)) |  1  0  0  1 |  9 | EQVB
+	(NOTB B)          |  1  0  1  0 | 10 | NOTB B, A is ignored
+	(ORB A (NOTB B))  |  1  0  1  1 | 11 |
+	(NOTB A)          |  1  1  0  0 | 12 | NOTB A, B is ignored
+	(ORB (NOTB A) B)) |  1  1  0  1 | 13 |
+	(NOTB (ANDB A B)) |  1  1  1  0 | 14 | NANDB
+	1                 |  1  1  1  1 | 15 | Aways 1 (Set)
+	(SHLB A B)        |             | 16 | Shift left
+	(SHRB A B)        |             | 17 | Shift right
+	(ASRB A B)        |             | 18 | Arithmetic shift right
+
+	The names in the "Notes" column are macros defining the
+	corresponding operations. E.g. (bitop 1 a b) == (andb a b).
+
+	Examples:
+
+	(bitop  0 123 456)  =>   0  ; clear
+	(bitop  1   7  14)  =>   6  ; and
+	(bitop  7   7   8)  =>  15  ; or
+	(bitop 16   1   4)  =>  16  ; shift left
+
+
+	-- (DIV N1 N2) => FIXNUM ---------------------------------------
+	-- (MOD N1 N2) => FIXNUM ---------------------------------------
+	-- (REM N1 N2) => FIXNUM ---------------------------------------
+
+	DIV returns the truncated quotient of its fixnum arguments N1
+	and N2, i.e. the quotient N1/N2 with all fractional digits cut
+	off.
+
+	REM returns the remainder of the truncated fixnum division. I.e.:
+
+	(rem a b)  ==  (- a (* b (div a b)))
+
+	MOD returns the remainder of the floored fixnum division. The
+	floored division is represented by FLOORDIV in the following
+	formula; note that this is *not* a LISP9 function! Formally,
+
+	(mod a b)  ==  (- a (* b (floordiv a b)))
+
+	Examples:
+
+	(mod 13 4)    =>  1
+	(rem 13 4)    =>  1
+
+	(mod -13 4)   =>  3
+	(rem -13 4)   =>  -1
+
+	(mod 13 -4)   =>  -3
+	(rem 13 -4)   =>  1
+
+	(mod -13 -4)  =>  -1
+	(rem -13 -4)  =>  -1
+
+
+	-- (EVENP FIXNUM) => T/NIL -------------------------------------
+	-- (ODDP FIXNUM)  => T/NIL -------------------------------------
+
+	EVENP returns T, if the given fixnum is divisible by two with
+	a remainder of zero [i.e. (= 0 (N REM 2))]. ODDP returns T, if
+	the remainder would be non-zero.
+
+	Examples:
+
+	(evenp 2)  =>  t
+	(evenp 3)  =>  nil
+	(oddp 2)   =>  nil
+	(oddp 3)   =>  t
+
+
+	-- (EXPT N1 N2) => FIXNUM --------------------------------------
+
+	Return N1 raised to the power of N2. Both arguments must be
+	fixnums. When the result does not fit in a fixnum, an error
+	will be signalled. Any value to the 0'th power is 1.
+
+	Examples:
+
+	(expt 2 0)   =>  1
+	(expt 2 2)   =>  4
+	(expt -3 3)  =>  -27
+
+
+	-- (GCD N1 N2) => FIXNUM ---------------------------------------
+	-- (LCM N1 N2) => FIXNUM ---------------------------------------
+
+	GCD returns the greatest common divisor of the fixnums N1 and N2.
+	LCM returns their least common multiple. When the result if LCM
+	does not fit in a fixnum, an error will be signalled.
+
+	Examples:
+
+	(gcd 12 -18)  =>  6
+	(lcm 9 6)     =>  18
+
+
+	-- (MAX N1 N2 ...) => FIXNUM -----------------------------------
+	-- (MIN N1 N2 ...) => FIXNUM -----------------------------------
+
+	Return the largest or smallest of the given fixnum arguments,
+	respectively.
+
+	Examples:
+
+	(min 1)         =>  1
+	(max 1 2)       =>  2
+	(min 3 -14 15)  =>  -14
+
+
+	-- (NOT EXPR) => T/NIL -----------------------------------------
+
+	Return T, if the given EXPR is NIL. Although this function is
+	extensionally equal to NULL, its application is different: it
+	is used to express the logical complement.
+
+	Examples:
+
+	(not t)        =>  nil
+	(not (= 1 2))  =>  t
+
+
+	** CHARACTER FUNCTIONS *****************************************
+
+	-- (ALPHAC CHAR)  => T/NIL -------------------------------------
+	-- (LOWERC CHAR)  => CHAR --------------------------------------
+	-- (NUMERIC CHAR) => T/NIL -------------------------------------
+	-- (UPPERC CHAR)  => T/NIL -------------------------------------
+	-- (WHITEC CHAR)  => T/NIL -------------------------------------
+
+	Return T, if the character CHAR has the corresponding property:
+
+	ALPHAC   the character is alphabetic (A-Z or a-z)
+	LOWERC   the character is a lower-case letter (a-z)
+	NUMERIC  the character is a decimal digit (0-9)
+	UPPERC   the character is an upper-case letter (A-Z)
+	WHITEC   the character is a space character:
+	         blank (\40), HT (\10), LF (\12), CR (\15), FF (\14)
+
+	Examples:
+
+	(alphac  #\A)  => t
+	(lowerc  #\a)  => t
+	(numeric #\9)  => t
+	(upperc #\A)   => t
+	(whitec #\sp)  => t
+
+
+	-- (C= C1 C2 ...)  => T/NIL ------------------------------------
+	-- (C< C1 C2 ...)  => T/NIL ------------------------------------
+	-- (C> C1 C2 ...)  => T/NIL ------------------------------------
+	-- (C<= C1 C2 ...) => T/NIL ------------------------------------
+	-- (C>= C1 C2 ...) => T/NIL ------------------------------------
+
+	These predicates return T, if their character arguments are
+
+	- equal (C=)
+	- in strictly increasing lexicographic order (C<)
+	- in strictly decreasing lexicographic order (C>)
+	- in monotonically increasing lexicographic order (C<=)
+	- in monotonically decreasing lexicographic order (C>=)
+
+	They are trivially true when applied to a single argument.
+
+	The order of two characters of different case is undefined, i.e.
+	(c< #\a #\B) may be T or NIL.
+
+	Examples:
+
+	(c= #\a #\a)       =>  t
+	(c< #\a #\b #\c)   =>  t
+	(c> #\z)           =>  t
+	(c<= #\a #\a #\b)  =>  t
+	(c>= #\b #\b)      =>  t
+
+
+	-- (DOWNCASE CHAR) => CHAR -------------------------------------
+	-- (UPCASE CHAR)   => CHAR -------------------------------------
+
+	Convert character CHAT to lower or upper case, respectively. If
+	the given character cannot be converted (because it is not a
+	letter or already has the desired case), return the character
+	unchanged.
+
+	Examples:
+
+	(downcase #\U)  =>  #\u
+	(downcase #\d)  =>  #\d
+
+	(upcase #\f)    =>  #\F
+	(upcase #\*)    =>  #\*
+
+
+	** STRING FUNCTIONS ********************************************
+
+	-- (MKSTR FIXNUM CHAR) => STRING -------------------------------
+	-- (MKSTR FIXNUM)      => STRING -------------------------------
+
+	Create a fresh string of the given length (FIXNUM). If a second
+	argument of the type char is specified, fill the string with
+	that character. When no second argument is given, the string is
+	filled with blanks.
+
+	Examples:
+
+	(mkstr 0)      =>   ""
+	(mkstr 5)      =>   "     "
+	(mkstr 5 #\_)  =>   "_____"
+
+
+	-- (NUMSTR FIXNUM) => STRING -----------------------------------
+	-- (NUMSTR N1 N2)  => STRING -----------------------------------
+
+	Return a string containing the external representation of the
+	given fixnum. When a second fixnum argument N2 is given, return
+	the external representation in base N2. The base must be between
+	2 and 36. The default base is decimal. Digits with values above
+	9 will be represented by lower-case letters.
+
+	Examples:
+
+	(numstr 123)       =>  "123"
+	(numstr 51996 16)  =>  "cafe"
+	(numstr -27 8)     =>  "-33"
+
+
+	-- (S= S1 S2)  => T/NIL ----------------------------------------
+	-- (S< S1 S2)  => T/NIL ----------------------------------------
+	-- (S> S1 S2)  => T/NIL ----------------------------------------
+	-- (S<= S1 S2) => T/NIL ----------------------------------------
+	-- (S>= S1 S2) => T/NIL ----------------------------------------
+
+	These predicates return T, if their string arguments are
+
+	- equal (S=)
+	- in strictly increasing lexicographic order (S<)
+	- in strictly decreasing lexicographic order (S>)
+	- in monotonically increasing lexicographic order (S<=)
+	- in monotonically decreasing lexicographic order (S>=)
+
+	The individual characters of two strings are compared using the
+	char comparison predicates C=, C<, etc. If S1 is a proper prefix
+	of S2, then (s< S1 S2) => T, and if S2 is a proper prefix of
+	S1, then (s> S1 S2) => T.
+
+	Examples:
+
+	(s=  "foo" "foo")   =>  t
+	(s<  "foo" "zork")  =>  t
+	(s>  "foo" "bar")   =>  t
+	(s<= "fob" "foo")   =>  t
+	(s>= "fob" "fob")   =>  t
+
+
+	-- (SCONC STRING ...) => STRING --------------------------------
+
+	Concatenate strings: return a fresh string that contains the
+	characters of the first STRING argument followed by the
+	characters of the second argument, etc. When no arguments are
+	given, return the empty string "".
+
+	Examples:
+
+	(sconc)              =>  ""
+	(sconc "foo")        =>  "foo"
+	(sconc "foo" "bar")  =>  "foobar"
+	
+
+	-- (SCOPY STRING) => STRING ------------------------------------
+
+	Return a fresh (and mutable) copy of the given string.
+
+	Examples:
+
+	(scopy "foo")  =>  "foo"
+
+	(sset (scopy "foo") 2 #\b)  =>  "fob"
+
+
+	-- (SFILL STRING CHAR) => STRING -------------------------------
+
+	Store the given char in every position of the given string. The
+	string will be modified in situ, hence it must be mutable.
+
+	Example:
+
+	(sfill (mkstr 5) #\x)  =>  "xxxxx"
+
+
+	-- (SI< S1 S2)  => T/NIL ---------------------------------------
+	-- (SI<= S1 S2) => T/NIL ---------------------------------------
+	-- (SI= S1 S2)  => T/NIL ---------------------------------------
+	-- (SI> S1 S2)  => T/NIL ---------------------------------------
+	-- (SI>= S1 S2) => T/NIL ---------------------------------------
+
+	These predicates return T, if their string arguments are
+
+	- equal (SI=)
+	- in strictly increasing lexicographic order (SI<)
+	- in strictly decreasing lexicographic order (SI>)
+	- in monotonically increasing lexicographic order (SI<=)
+	- in monotonically decreasing lexicographic order (SI>=)
+
+	The individual characters of two strings are compared using
+
+	(lambda (c1 c2) (PRED (downcase c1) (downcase c2)))
+
+	where PRED is the corresponding char comparison predicate (C=,
+	C<, etc). The 'I' in SI=, etc, means "case-Insensitive".
+
+	If S1 is a proper prefix of S2, then (si< S1 S2) => T, and if S2
+	is a proper prefix of S1, then (si> S1 S2) => T.
+
+	Examples:
+
+	(si=  "foo" "FOO")   =>  t
+	(si<  "Foo" "zork")  =>  t
+	(si>  "foo" "BAR")   =>  t
+	(si<= "fob" "Foo")   =>  t
+	(si>= "FOB" "fob")   =>  t
+
+
+	-- (SREF STRING FIXNUM) => CHAR --------------------------------
+
+	Extract a character from a string. FIXNUM specifies the position
+	of the character to extract. Positions start at 0. The FIXNUM
+	argument must be positive and less than (ssize STRING).
+
+	Examples:
+
+	(sref "fob" 0)  =>  #\f
+	(sref "fob" 2)  =>  #\b
+
+
+	-- (SSET STRING FIXNUM CHAR) => STRING -------------------------
+
+	Store the character CHAR in position FIXNUM of the given string.
+	The string will be modified in situ, hence it must be mutable.
+	Positions start at 0, so FIXNUM must be positive and less than
+	(ssize STRING).
+
+	Examples:
+
+	(sset (mkstr 5 #\_) 2 #\x)         =>  "__x__"
+	(sset (string #\f #\o #\o) 2 #\b)  =>  "fob"
+
+
+	-- (SSIZE STRING) => FIXNUM ------------------------------------
+
+	Return the number of characters in the given string.
+
+	Examples:
+
+	(ssize "")               =>  0
+	(ssize "hello, world!")  =>  13
+	(ssize "\0\1\2\3")       =>  4
+
+
+	-- (STRING CHAR ...) => STRING ---------------------------------
+
+	Create a fresh string from the given arguments. The arguments
+	must be of the type char.
+
+	Examples:
+
+	(string)              =>  ""
+	(string #\f #\o #\b)  =>  "fob"
+
+
+	-- (STRNUM STRING)        => FIXNUM/NIL ------------------------
+	-- (STRNUM STRING FIXNUM) => FIXNUM/NIL ------------------------
+
+	Return the number whose external representation is stored in the
+	given string. When no second argument is specified, the number
+	will be assumed in base 10 (decimal). When the FIXNUM argument
+	is given it indicates the base of the representation in the
+	string. The base must be between 2 and 36.
+
+	The number represented by STRING may have an optional plus (+) or
+	minus (-) sign. It may *not* contain any non-numeric leading or
+	trailing characters.
+
+	When STRING does not contain a valid external representation
+	of a number, STRNUM returns NIL. This includes numeric strings
+	that cannot be converted to fixnum without overflow.
+
+	Examples:
+
+	(strnum "123")     =>  123
+	(strnum "+123" 8)  =>  83
+	(strnum "-fff 16)  =>  -4095
+
+	(strnum "foo")     =>  nil
+	(strnum " -1")     =>  nil
+	(strnum "123 ")    =>  nil
+
+
+	-- (SUBSTR STRING N1 N2) => STRING -----------------------------
+
+	Return a fresh string that contains a substring extracted from
+	the given string. The substring starts at position N1 and
+	extends to (but does not include) position N2. N1 and N2 must be
+	positive fixnums, N2 must not be larger than the size of STRING,
+	and N1 must not be larger than N2, i.e.
+
+	(<= 0 N1 N2 (ssize STRING))  =>  T
+
+	must hold.
+
+	Examples:
+
+	(substring "abc" 0 0)  =>  ""
+	(substring "abc" 0 1)  =>  "a"
+	(substring "abc" 0 2)  =>  "ab"
+	(substring "abc" 0 3)  =>  "abc"
+	(substring "abc" 1 3)  =>  "bc"
+	(substring "abc" 2 3)  =>  "c"
+	(substring "abc" 3 3)  =>  ""
+
+
+	** VECTOR FUNCTIONS ********************************************
+
+	-- (MKVEC FIXNUM)      => VECTOR -------------------------------
+	-- (MKVEC FIXNUM EXPR) => VECTOR -------------------------------
+
+	Create a fresh vector of the given length (FIXNUM). If a second
+	argument is specified, fill the string with that argument. When
+	no second argument is given, the vector is filled with NIL.
+
+	Examples:
+
+	(mkvec 0)       =>   #()
+	(mkvec 5)       =>   #(nil nil nil nil nil)
+	(mkvec 5 'xyz)  =>   #(xyz xyz xyz xyz xyz)
+
+
+	-- (SUBVEC VECTOR N1 N2) => VECTOR -----------------------------
+
+	Return a fresh vector that contains elements extracted from the
+	given vector. The extracted elements start at position N1 and
+	extends to (but does not include) position N2. N1 and N2 must be
+	positive fixnums, N2 must not be larger than the size of VECTOR,
+	and N1 must not be larger than N2, i.e.
+
+	(<= 0 N1 N2 (vsize VECTOR))  =>  T
+
+	must hold.
+
+	Examples:
+
+	(subvec #(a b c) 0 0)  =>  #()
+	(subvec #(a b c) 0 1)  =>  #(a)
+	(subvec #(a b c) 0 2)  =>  #(a b)
+	(subvec #(a b c) 0 3)  =>  #(a b c)
+	(subvec #(a b c) 1 3)  =>  #(b c)
+	(subvec #(a b c) 2 3)  =>  #(c)
+	(subvec #(a b c) 3 3)  =>  #()
+
+
+	-- (VCONC VECTOR ...) => VECTOR --------------------------------
+
+	Concatenate vectors: return a fresh vector that contains the
+	elements of the first VECTOR argument followed by the elements
+	of the second argument, etc. When no arguments are given, return
+	the empty vector #().
+
+	Examples:
+
+	(vconc)                    =>  #()
+	(vconc #(f o o))           =>  #(f o o)
+	(vconc #(f o o) #(b a r))  =>  #(f o o b a r)
+	
+
+	-- (VECTOR EXPR ...) => VECTOR ---------------------------------
+
+	Create a fresh vector from the given arguments.
+
+	Examples:
+
+	(vector)               =>  #()
+	(vector 'foo (* 6 7))  =>  #(foo 42)
+
+
+	-- (VFILL VECTOR EXPR) => VECTOR -------------------------------
+
+	Store the given EXPR in every position of the given vector. The
+	vector will be modified in situ, hence it must be mutable.
+
+	Example:
+
+	(vfill (mkvec 5) 'x)  =>  #(x x x x x)
+
+
+	-- (VREF VECTOR FIXNUM) => OBJ ---------------------------------
+
+	Extract an element from a vector. FIXNUM specifies the position
+	of the element to extract. Positions start at 0. The FIXNUM
+	argument must be positive and less than (vsize VECTOR).
+
+	Examples:
+
+	(vref '(foo bar baz) 0)  =>  'foo
+	(vref '(foo bar baz) 2)  =>  'baz
+
+
+	-- (VSET VECTOR FIXNUM EXPR) => VECTOR -------------------------
+
+	Store the given EXPR in position FIXNUM of the given vector.
+	The vector will be modified in situ, hence it must be mutable.
+	Positions start at 0, so FIXNUM must be positive and less than
+	(vsize VECTOR).
+
+	Examples:
+
+	(vset (mkvec 5 'x) foo)        =>  #(x x foo x x)
+	(vset (vector 'f 'o 'o) 2 'b)  =>  #(f o b)
+
+
+	-- (VSIZE VECTOR) => FIXNUM ------------------------------------
+
+	Return the number of elements in the given vector.
+
+	Examples:
+
+	(vsize #())           =>  0
+	(vsize #(a b c d e))  =>  5
+
+
+	** MACROS ******************************************************
+
+	-- (MACRO <KEYWORD> FUN) => UNSPECIFIC -------------------------
+
+	Bind the symbol <KEYWORD> to the given function in the syntactic
+	environment, thereby creating a macro. The syntactic environment
+	is distinct from all lexical environments of LISP9, so
+	definitions via DEF and local variables via LAMBDA do not
+	interfere with it. There is only one syntactic environment in
+	which all macros are bound. Hence the MACRO form must appear at
+	the top level (or inside of a PROG form at the top level).
+
+	Macros are used to define derived special forms, like COND, LET,
+	and DO. See the section on DERIVED SYNTAX for details.
+
+	Examples:
+
+	(macro kwote
+	  (lambda (x)
+	    @(quote ,x)))
+
+	(macro when
+	  (lambda (p . xs)
+	    @(if ,p (prog . ,xs))))
+
+
+	-- (DEFMAC (<KW> . <FORMALS>) EXPR1 EXPR2 ...) => UNSPECIFIC ---
+
+	The DEFMAC form is an abbreviation for
+
+	(macro <kw> (lambda <formals> expr1 expr2 ...))
+
+	where <formals> is a formal argument list as specified in the
+	FORMAL SYNTAX section. Note that the dot in the above form only
+	serves to formalize the equivalence between MACRO and DEFMAC.
+	You would normally write
+
+	(defmac (foo . (x y)) @(bar ,x ,y))
+
+	as
+
+	(defmac (foo x y) @(bar ,x ,y))
+
+	although the former would also work.
+
+	Examples:
+
+	(defmac (kwote x)
+	  @(quote ,x))
+
+	(defmac (when p . xs)
+	  @(if ,p (prog . ,xs)))
+
+
+	-- (GENSYM) => SYMBOL ------------------------------------------
+
+	Generate a unique local symbol. Generated symbols (gensyms) are
+	typically used in macros to avoid name capturing. Imagine the
+	SWAP example below with the name FOO instead of a gensym and
+	then applying (swap foo bar) to illustrate the problem that
+	GENSYM solves.
+
+	The LISP9 implementation of GENSYM will not intern gensym names
+	and start to recycle them each time the system is started.
+	Therefore, gensyms should never be used to name global variables.
+	Their names *will* be reused. This is not a problem in local
+	definitions, because variable names are no longer used after
+	compiling the expressions in which they are contained.
+
+	Examples:
+
+	(gensym)                =>  G1
+	(eq (gensym) (gensym))  =>  nil
+
+	(defmac (swap a b)
+	  (let ((x (gensym)))
+	    @(prog (setq ,x ,a)
+	           (setq ,a ,b)
+                   (setq ,b ,x))))
+
+
+	-- (MX EXPR)  => OBJ -------------------------------------------
+	-- (MX1 EXPR) => OBJ -------------------------------------------
+
+	Macro-expand the given EXPR and returns its expanded form. When
+	EXPR does not contain any macro applications, return it in its
+	original form.
+
+	MX expands all macro applications in EXPR recursively, so the
+	result of MX will be free of derived special syntax.
+
+	MX1 expands the first (leftmost) macro application in EXPR and
+	return the resulting form immediately. If the macro should be
+	recursive, it will only be expanded once.
+
+	Note that EXPR must be quoted, or it will be macro-expanded
+	before passing it to MX or MX1.
+
+	Examples:
+
+	(mx1 '(let* ((a 1) (b a)) b))
+	          =>  (let ((a 1)) (let* ((b a)) b))
+
+	; iterative application of MX1 will expand EXPR completely:
+
+	(mx1 **)  =>  ((lambda (a) (let* ((b a)) b)) 1)
+	(mx1 **)  =>  ((lambda (a) (let ((b a)) (let* () b))) 1)
+	(mx1 **)  =>  ((lambda (a) ((lambda (b) (let* () b)) a)) 1)
+	(mx1 **)  =>  ((lambda (a) ((lambda (b) (prog b)) a)) 1)
+
+	; MX performs all of the above expansions at once:
+
+	(mx '(let* ((a 1) (b a)) b))
+	          =>  ((lambda (a) ((lambda (b) (prog b)) a)) 1)
+
+
+	** NON-LOCAL EXITS *********************************************
+
+	-- (CATCH FUN^1)      => OBJ -----------------------------------
+	-- (THROW CTAG EXPR)  => N/A -----------------------------------
+	-- (CATCH* FUN^1)     => OBJ -----------------------------------
+	-- (THROW* CTAG EXPR) => N/A -----------------------------------
+
+	CATCH packages the current escape continuation into a "catch tag"
+	and passes it to the given function, which must be a function of
+	one argument. The function will then evaluate and return a
+	result, which will in turn be returned by CATCH -- unless the
+	function applies THROW to the catch tag passed to it.
+
+	When FUN^1 applies THROW to the catch tag generated by CATCH,
+	then evaluation of the function will be aborted immediately and
+	control will be passed back to CATCH. The result of CATCH will
+	in this case be the second argument (EXPR) of the corresponding
+	THROW.
+
+	A catch tag that escapes the dynamic extent of CATCH is no longer
+	valid and throwing it will cause an undefined result. That is,
+	CATCH only captures its escape continuation, so catch tags can
+	only be used to escape the dynamic extent of CATCH, but not to
+	reenter it.
+
+	The difference between CATCH/THROW and CATCH*/THROW* is that
+	CATCH and THROW unwinds UNWIND functions, which CATCH* and
+	THROW* do not do. See UNWIND for details. The effects of
+	combining CATCH* with THROW or CATCH with THROW* are undefined.
+
+	For examples of the interaction between CATCH, THROW, and UNWIND,
+	see UNWIND. Other than that, CATCH*/THROW* can be considered to
+	be a more efficient version of CATCH and THROW.
+
+	Examples:
+
+	(cons 'foo (catch* (lambda (ct) (cons 'baz (throw* ct 'bar)))))
+	                             =>  (foo . bar)
+
+	(define (list-length a)
+	  (catch*
+	    (lambda (improper)
+	      (let loop ((a a))
+	        (cond ((null? a) 0)
+	              ((pair? a) (+ 1 (loop (cdr a))))
+	              (else (throw* improper nil)))))))
+
+	(list-length '(1 2 3))       =>  3
+	(list-length '(1 2 3 . 4 ))  =>  nil
+
+
+	-- (UNWIND FUN1^0 FUN2^0) => OBJ -------------------------------
+
+	Evaluate the body of FUN2^0 (the "body") and then the body of
+	FUN1^0 (the "unwind function"), returning the value delivered
+	by FUN2^0.
+
+	If UNWIND appears inside of the dynamic extent of an application
+	of CATCH and a THROW inside of FUN2^0 transfers control to that
+	CATCH, then the body of FUN1^0 will still evaluate. E.g.
+
+	(let ((foo 'initial))
+	  (catch
+	    (lambda (c)
+	      (unwind
+	        (lambda ()
+	          (setq foo 'unwound))
+	        (lambda ()
+	          (setq foo 'modified)
+	          (throw c 'ignored)
+	          (setq foo 'unreached)))))
+          foo)                               =>  unwound
+
+	When there are multiple UNWIND expressions in the dynamic extent
+	of a CATCH expression, then all of them will evaluate, and the
+	most recently registered unwind function will evaluate first.
+	When there are multiple nested CATCH expressions, each with its
+	own UNWIND expressions, then THROWing a catch tag will trigger
+	evaluation of all unwind functions that were registered after
+	evaluating the receiving CATCH and before evaluating the THROW.
+
+	Rationale: transferring control non-locally can leave the state
+	of a program altered in an undesired way. For example, given a
+	native implementation of WITH,
+
+	(catch-errors (nil)
+	  (with ((*parameter* value))
+	    (do-something)))
+
+	will fail to reset *PARAMETER* to its original value when an
+	error occurs in DO-SOMETHING. UNWIND can be used to reset the
+	value of the parameter when control is passed "across" an
+	unwind function:
+
+	(let ((outer-parameter *parameter*))
+	  (catch-errors (nil)
+	    (unwind (lambda ()
+	              (setq *parameter* outer-parameter))
+	            (lambda ()
+	              (with ((*parameter* value))
+	                (do-something))))))
+
+	The implementation of WITH that is part of LISP9 will do this
+	internally, though.
+
+	Other uses of UNWIND would be closing files, changing input or
+	output ports, and any other operations that are required to
+	leave the state of a program in a consistent way after catching
+	a non-local exit.
+
+	Examples:
+
+	; see above
+
+	(unwind (lambda () 'foo)
+	        (lambda () 'bar))  =>  bar
+
+
+	-- (ERROR STRING EXPR) => UNDEFINED ----------------------------
+	-- (ERROR STRING)      => UNDEFINED ----------------------------
+
+	Signal an error and abort the computation in progress. STRING
+	will be printed as an error message. When an EXPR argument is
+	also specified, print that argument (using PRIN) after the
+	message.
+
+	ERROR does not return any value. It returns control to the
+	REPL or, in case the interpreter runs in batch mode, terminates
+	program execution.
+
+	Examples:
+
+	(error "good bye!")
+
+	(if (< x 1)
+	    (error "expected positive X, but got" x))
+
+
+	-- (CATCH-ERRORS (<ERRVAL>) EXPR1 EXPR2 ...) => OBJ ------------
+
+	First evaluate <ERRVAL>, which can be any expression. Then set
+	up a special catch tag (see CATCH) that will be thrown when the
+	LISP9 system would signal an error. Within the dynamic extent of
+	CATCH-ERRORS (the "error context") evaluate the given EXPRs.
+	When none of the expressions signals an error, return the value
+	of the last expression.
+
+	When an expression in the body of CATCH-ERRORS signals an error,
+	return <ERRVAL> immediately (via THROW), thereby aborting
+	evaluation of the given expressions.
+
+	Note that CATCH-ERRORS will *not* unwind the unwind stack when
+	an error is being caught, becasue it uses CATCH* and THROW*
+	internally! Unwinding must be done explicitly in code that uses
+	CATCH-ERRORS.
+
+	When no <ERRVAL> is specified (i.e. the first argument of
+	CATCH-ERRORS is NIL), the error message passed to ERROR will be
+	returned in case of an error. Note that ERROR is also used by
+	built-in functions of LISP9 to signal errors.
+
+	Multiple error contexts may exist. In this case, <ERRVAL> is
+	evaluated in the outer ("surrounding") error context and the
+	body of CATCH-ERRORS is evaluated in the inner context. When
+	CATCH-ERRORS returns (in whatever way), the outer context will
+	be re-established.
+
+	Examples:
+
+	(catch-errors ('foo) (+ 1 2))       =>  3
+	(catch-errors ('foo) (car nil))     =>  foo
+	(catch-errors (0) (div 1 0))        =>  0
+
+	(catch-errors () (cdr nil))         =>  "cdr: expected pair"
+
+	(catch-errors ((div 1 0)) 'bar)     =>  error
+
+	(catch-errors ('foo)
+	  (catch-errors ((div 1 0)) 'bar))  =>  foo
+
+
+	** INPUT/OUTPUT FUNCTIONS **************************************
+
+	-- (CLOSE-PORT PORT) => UNSPECIFIC -----------------------------
+
+	Close an input or output port. The port becomes inaccessible
+	immediately and will not accept or deliver any further input
+	or output.
+
+	Note that LISP9 closes ports automatically when they can no
+	longer be referenced by the system. CLOSE-PORT is mostly used
+	to make sure that all output sent to a port has been written
+	to the associated file or device.
+
+	The standard ports -- (inport), (outport), and (errport) --
+	should not be closed.
+
+	Example:
+
+	(close-port (open-outfile "file.tmp"))
+
+
+	-- (DELETE STRING) => UNSPECIFIC -------------------------------
+
+	Delete the file specified in STRING. When the file does not
+	exist or cannot be deleted, an error will be signalled.
+
+	Example:
+
+	(delete "file.tmp")
+
+	(catch-errors (t) (delete "file.tmp"))  =>  t
+
+
+	-- (ERRPORT) => OUTPORT ----------------------------------------
+	-- (INPORT)  => INPORT -----------------------------------------
+	-- (OUTPORT) => OUTPORT ----------------------------------------
+
+	Return the current error port, input port, or output port,
+	respectively. The current input port -- (INPORT) -- is the port
+	from which all input function will read their input unless an
+	explicit port is passed to them. Similarly, the current output
+	port -- (OUTPORT) -- is the port where all output will go unless
+	an explicit port is given.
+
+	(ERRPORT) is a port that is useful for reporting errors in case
+	the (OUTPORT) has been redirected.
+
+	Examples:
+
+	(let ((old (inport))
+	      (new (open-infile "some-file"))
+	      (ln  nil))
+	  (set-inport new)
+	  (setq ln (readln))     ; (readln) will read from NEW
+	  (set-inport old)
+	  ln)
+
+	(prog
+	  (princ "Something unusual has happened!" (errport))
+	  (terpri (errport)))
+
+
+	-- (EXISTSP STRING) => T/NIL -----------------------------------
+
+	Return T, if the file specified in STRING exists and is readable
+	by the LISP9 process.
+
+	Examples:
+
+	(if (not (existsp some-file))
+	    (error "file not found" some-file))
+
+	(if (existsp "file.tmp")
+	    (delete "file.tmp"))
+
+
+	-- (FLUSH OUTPORT) => UNSPECIFIC -------------------------------
+
+	Write any pending output that has been send to the given output
+	port, but not yet written to the associated file or device.
+
+	Example:
+
+	(prog (princ "prompt: ")
+	      (flush (outport)))
+
+
+	-- (EOFP EXPR) => T/NIL ----------------------------------------
+
+	Return T, if EXPR is the EOF marker.
+
+	Example:
+
+	(prog (with-outfile "test.tmp" (lambda () nil))
+	      (eofp (with-infile "test.tmp" read)))      =>  t
+
+
+	-- (OPEN-INFILE STRING)    => INPORT ---------------------------
+	-- (OPEN-OUTFILE STRING)   => OUTPORT --------------------------
+	-- (OPEN-OUTFILE STRING T) => OUTPORT --------------------------
+
+	Open a file for input or output, respectively, and return a port
+	for accessing the file. When any of the above functions fails to
+	open a file, an error will be signalled.
+
+	When OPEN-OUTFILE opens an existing file, the file will be
+	truncated to a size of 0. When a second argument of T is passed
+	to OPEN-OUTFILE, the file will not be truncated and output
+	written to the resulting port will be appended to the existing
+	file.
+
+	Example:
+
+	(open-infile "some-file")  =>  #<inport 3>
+
+
+	-- (FORMAT EXPR) => STRING -------------------------------------
+
+	Return a fresh string containing the external representation of
+	the given expression. FORMAT is like PRIN (q.v.), but directs
+	output to a string instead of a port.
+
+	Examples:
+
+	(format 123)                  =>  "123"
+	(format '(a b c d))           =>  "(a b c d)"
+	(format "\"Hi\", she said.")  =>  "\"Hi\"", she said."
+
+
+	-- (PRIN EXPR)          => OBJ ---------------------------------
+	-- (PRIN EXPR OUTPORT)  => OBJ ---------------------------------
+	-- (PRINC EXPR)         => OBJ ---------------------------------
+	-- (PRINC EXPR OUTPORT) => OBJ ---------------------------------
+	-- (PRINT EXPR ...)     => UNSPECIFIC  -------------------------
+
+	Write an EXPR to the given output port, or to (outport) when no
+	port was specified. PRIN writes the external representation of
+	EXPR to a port and PRINC pretty-prints the expression. The
+	external representation and the pretty form are the same except
+	for strings and characters, which will print as follows:
+
+	PRIN       PRINC       PRIN    PRINC
+	"foo"      foo         #\x     x
+	"\"bar\""  "bar"       #\sp    (blank)
+	"\\x"      \x          #\\7    (sounds a bell)
+	"a\nb"     a
+	           b
+
+	The output of PRINC is mostly intended to be read by human
+	beings while the output of PRIN is in such a format that it can
+	be read back in by the READ function. There are some LISP9
+	objects that do not have a READable external representation,
+	though, like functions, catch tags, and I/O ports. For those
+	objects, the printing functions will emit a descriptive text
+	that cannot be read by READ. Such text is typically prefixed by
+	the sequence "#<", which will cause an error when attempting to
+	read it.
+
+	Neither PRIN nor PRINC print a newline sequence after their
+	output. Use (print) or (terpri) to begin a new line.
+
+	PRINT prints all of its arguments, separated by spaces, in the
+	same way as PRIN would and emits a newline sequence at the end.
+	PRINT always prints to (outport), no other port can be specified,
+	but its output can be redirected using WITH-OUTFILE.
+
+	PRIN and PRINC return the object being printed.
+
+	Examples:
+
+	(prin "\"Hi\", she said.")   prints  "\"Hi\", she said."
+	(princ "\"Hi\", she said.")  prints  "Hi", she said.
+
+	(prin '(1 #\2 (3)))          prints  (1 #\2 (3))
+	(princ '(1 #\2 (3)))         prints  (1 #\2 (3))
+
+	(print 1 #\2 '(3))           prints  1 #\2 (3)  and does (terpri)
+
+	(print)                      just emits a newline sequence
+
+
+	-- (READ)        => OBJ/EOF ------------------------------------
+	-- (READ INPORT) => OBJ/EOF ------------------------------------
+	-- (READ STRING) => LIST/STRING --------------------------------
+
+	Read the external representation of a LISP9 object from the
+	given input port or, if no port is specified, from (inport).
+	READ skips over leading space characters (in the sense of
+	WHITEC) and keeps reading until all characters of the external
+	representation of one object have been consumed.
+
+	When the object is a compound object, like a list or a vector,
+	READ keeps reading until the outermost closing parenthesis has
+	been found.
+
+	When READ encounters the end of its input before reading the
+	first character of an object, it will return the EOF marker.
+	When encountering the end of its input inside of a compound
+	object, it will signal an error.
+
+	When a string is passed to READ, it will read that string
+	instead of an input port and return the resulting object in a
+	single-element list. When reading a string, no error will ever
+	be signalled, but another string, which describes the error,
+	will be returned.
+
+	When reading a string that contains the external representations
+	of multiple objects, only the first object will be read.
+
+	READ returns the object whose external representation it has
+	read.
+
+	Examples:
+
+	(read) foo               =>  foo
+	(read) 'foo              =>  'foo
+	(read) (quote foo)       =>  'foo
+
+	(read) (1 #\2 (3) #(4))  =>  (1 #\2 (3) #(4))
+
+	(read) ; comment
+	         foo             =>  foo
+
+	(read) (defun (f x)
+                 (* x x x))      =>  (defun (f x) (* x x x))
+
+	(read "(foo bar)")       =>  ((foo bar))
+	(read "1 2 3")           =>  1
+	(read ". oops")          =>  "unexpected '.'"
+
+
+	-- (READC)        => CHAR/EOF ----------------------------------
+	-- (READC INPORT) => CHAR/EOF ----------------------------------
+	-- (PEEKC)        => CHAR/EOF ----------------------------------
+	-- (PEEKC INPORT) => CHAR/EOF ----------------------------------
+
+	Read a character from the given input port or from (inport), if
+	no port is specified. Return the character. When no more input
+	is available from the given port, return the EOF marker instead.
+
+	READC advances the read pointer of the port, so that a
+	subsequent READC will produce the next character from the file
+	or device associated with the port. PEEKC does not advance the
+	read pointer, so a subsequent READC will deliver the same
+	character again.
+
+	Examples:
+
+	(readc)x  =>  #\x
+
+	(prog (readc) (readc))xy  =>  #\y
+	(prog (peekc) (readc))x   =>  #\x
+
+
+	-- (READLN)        => STRING/EOF -------------------------------
+	-- (READLN INPORT) => STRING/EOF -------------------------------
+
+	Read characters from the given input port or, if no port is
+	specified, from (inport). Keep reading characters until a
+	newline sequence is found. Return a fresh string containing
+	all characters consumed, but excluding the newline sequence
+	itself. When no characters are available on the input port,
+	return the EOF marker.
+
+	Examples:
+
+	(readln) foo bar baz  =>  " foo bar baz"
+
+	(readln (inport))     =>  ""
+
+
+	-- (RENAME S1 S2) => UNSPECIFIC --------------------------------
+
+	Rename the file specified in S1 to the name specified in S2.
+	When the file cannot be renamed, an error will be signalled.
+
+	Example:
+
+	(rename "old-name" "new-name")
+
+
+	-- (SET-INPORT INPORT)   => UNSPECIFIC -------------------------
+	-- (SET-OUTPORT OUTPORT) => UNSPECIFIC -------------------------
+
+	Specify a new current input port or output port, respectively.
+	After applying SET-INPORT, INPORT will return the given port and
+	after applying SET-OUTPORT, OUTPORT will return the specified
+	port.
+
+	These functions are typically not used in user-defined functions.
+	Use WITH-INFILE or WITH-OUTFILE instead.
+
+	Examples:
+
+	(set-outport (errport))  ; output will go to the error port
+	                         ; by default now
+
+	; see INPORT for another example
+
+
+	-- (TERPRI)         => #\NL ------------------------------------
+	-- (TERPRI OUTPORT) => #\NL ------------------------------------
+
+	Write a newline sequence to the given output port, or, if no
+	port was specified, to (outport).
+
+	Examples:
+
+	(terpri)
+	(terpri (errport))
+
+
+	-- (WITH-INFILE STRING FUN^0)  => OBJ --------------------------
+	-- (WITH-OUTFILE STRING FUN^0) => OBJ --------------------------
+
+	Open the file specified in STRING for input or output,
+	respectively. The resulting port will become the current input
+	or output port in the dynamic extent of the corresponding
+	function, i.e. while FUN^0 evaluates. FUN^0 must be a function
+	of no arguments. All applications of I/O function inside of
+	FUN^0 that do not specify an explicit port will read from or
+	write to the port created by WITH-INFILE or WITH-OUTFILE.
+
+	When FUN^0 returns, the created port will be closed and the
+	value delivered by FUN^0 will be returned.
+
+	Examples:
+
+	(with-infile "some-file" readln)  =>  "first line of some-file"
+
+	(with-outfile "some-file"
+	  (lambda ()
+	    (princ "Hello, World!")
+	    (terpri)))                    =>  #\nl
+
+
+	-- (WITH-INPORT STRING FUN^1)  => OBJ --------------------------
+	-- (WITH-OUTPORT STRING FUN^1) => OBJ --------------------------
+
+	Open the file specified in STRING for input or output,
+	respectively. The resulting port will be passed to FUN^1, which
+	must be a function of one argument. FUN^1 can then use the port
+	to read or write the opened file. When FUN^1 returns, the port
+	will be closed and the result of FUN^1 will be returned.
+
+	Examples:
+
+	(with-inport "some-file"
+	  (lambda (in)
+	    (readln)             ; this will read (inport)
+	    (readln in)))        ; this will read "some-file"
+
+	(with-outport "some-file"
+	  (lambda (out)
+	    (print "this will go to (outport)")
+	    (princ "this will go to some-file" out)
+	    (terpri out)))       ; this will also go to the file
+
+
+	-- (WRITEC CHAR)         => CHAR -------------------------------
+	-- (WRITEC CHAR OUTPORT) => CHAR -------------------------------
+
+	Write a CHAR to the given output port, or to (outport) when no
+	port was specified. The character is written as if printed by
+	PRINC. WRITEC returns the char it printed.
+
+	Examples:
+
+	(writec #\x)   =>  #\x   ; prints x
+	(writec #\sp)  =>  #\sp  ; prints a space character
+
+
+	** SYSTEM FUNCTIONS ********************************************
+
+	-- (CMDLINE) => LIST -------------------------------------------
+
+	Deliver a list of the command line arguments passed to a LISP9
+	program. Each element of the list will be a string containing
+	one argument.
+
+	Example:
+
+	(cmdline)  =>  ("foo" "bar" "baz")  ; Given that the program
+	                                    ; was started with
+	                                    ; "ls9 program foo bar baz"
+
+
+	-- (CONSTP EXPR) => T/NIL --------------------------------------
+
+	Return T, if EXPR is immutable. The following objects are
+	immutable:
+
+	- Non-empty quoted lists
+	- non-empty vector literals
+	- Non-empty string literals
+
+	CONSTP facilitates the implementation of metacircular
+	interpreters, because it allows to intercept immutable
+	arguments to procedures such as SETCAR, SSET, or VFILL.
+
+	Examples:
+
+	(constp '(1 2 3))      =>  t
+	(constp (list 1 2 3))  =>  nil
+
+
+	-- (DUMP-IMAGE STRING) => UNSPECIFIC ---------------------------
+	-- (SAVE)              => UNSPECIFIC ---------------------------
+
+	Save the complete state of the LISP9 system to an image file.
+	The image will contain the complete top level environment and
+	the syntactic environment of the interpreter as well as all
+	objects referenced by them. Note, though, that I/O ports will
+	no longer be open when restarting the image file.
+
+	The STRING argument of DUMP-IMAGE names the image file. The SAVE
+	function saves the system state to the file name in the special
+	variable *IMAGEFILE*. This variable will be set automatically
+	when LISP9 restarts an image file. DUMP-IMAGE will change the
+	value of the variable to its argument after successfully writing
+	an image file. When *IMAGEFILE* is NIL, SAVE will signal an
+	error.
+
+	Before writing an image file, any existing image file named
+	"file.image" will be renamed to "file.oimage". When the file
+	has no ".image" suffix, ".oimage" will be appended.
+
+	Examples:
+
+	(dump-image "ls9.image")
+	(save)
+
+
+	-- (EVAL EXPR) => OBJ ------------------------------------------
+
+	Evaluate the given expression, as if entered at the REPL, and
+	return its value. In fact, EVAL is the "E" in read-eval-print
+	loop. EXPR is evaluated in the top-level environment, so if EXPR
+	is a definition (DEF form or derived from it) or mutation (SETQ
+	form), it will alter the top-level environment.
+
+	Note that EXPR must be quoted, or the *value* of EXPR will be
+	passed to EVAL (thereby evaluating EXPR twice).
+
+	Examples:
+
+	(eval 'foo)   =>  foo
+	(eval ''foo)  =>  'foo
+
+	(eval '(cons (- 2 1) 2))  =>  (1 . 2)
+
+	(prog (def foo 'zzz)
+	      (eval '(def foo 'bar))
+	      foo)                    =>  bar
+
+
+	-- (GC) => LIST ------------------------------------------------
+
+	Perform a garbage collection and return a list containing the
+	amount of free nodes and free vector cells, respectively:
+
+	(free-nodes free-vcells)
+
+	Running GC will also finalize and close all I/O ports that are
+	still open, but can no longer be accessed by any LISP9 program.
+
+	Example:
+
+	(gc)  =>  (245498 235877)  ; actual values will probably differ
+
+
+	-- (LOAD STRING) => UNSPECIFIC ---------------------------------
+
+	Open the file specified in STRING and read an evaluate the LISP9
+	expressions contained in it. The expressions are evaluated in
+	the top level environment, as if typed in at the REPL. While
+	loading, the value of (inport) stays unaffected, i.e. applying
+	READ or a similar function inside of the file being loaded will
+	suspend loading and read input from the original (inport).
+
+	Example:
+
+	(with-outfile "test.tmp"
+	  (lambda ()
+	    (print '(def foo 'bar))))
+        (load "test.tmp")
+	foo               =>  bar
+
+
+	-- (OBTAB) => VECTOR -------------------------------------------
+
+	Return a sparse vector containing all objects that are currently
+	known to the LISP9 system. Unused slots of the vector will be
+	set to NIL (except for the first slot, which contains the actual
+	object NIL).
+
+	The OBTAB (object table) is a highly dynamic structure where
+	elements will be added by the reader (READ) and deleted (set to
+	NIL) by the garbage collector. The OBTAB grows on demand.
+
+
+	-- (START) => UNSPECIFIC ---------------------------------------
+
+	This function is applied to zero arguments when the interpreter
+	starts, after loading program files, but before entering batch
+	execution or the REPL. By default this function is undefined and
+	the application will fail silently.
+
+	When a START function is defined and stored in an image file,
+	though, it will evaluate each time the interpreter is invoked.
+
+	Example:
+
+	(defun (start) (princ "Hello, World\n"))
+	(save)
+
+
+	-- (SYMTAB) => VECTOR ------------------------------------------
+
+	Return a vector containing all symbols known to the LISP9 system.
+	Unused slots in the vector will be set to NIL. The symbol table
+	(SYNTAB) grows on demand.
+
+	Note that symbols generated by GENSYM will not appear in the
+	table.
+
+
+	-- (SYSCMD STRING) => FIXNUM -----------------------------------
+
+	Pass the given string to the operating system for execution.
+	Return the exit status delivered by the operating system, where
+	zero usually indicates success and non-zero failure.
+
+	Example:
+
+	(system "ls")  =>  0   ; will list files on a Unix system
+
+
+	-- (UNTAG EXPR) => OBJ -----------------------------------------
+
+	Remove the tag from a tagged data object, if possible. If the
+	tag cannot be removed, return NIL. An untagged data object is
+	not a valid LISP9 object and should not passed to any function
+	without knowing the internal structure of the object.
+
+	USING THIS FUNCTION CARELESSLY *WILL* CRASH THE LISP9 SYSTEM!
+
+	The most common application of this function is to extract the
+	bytecode of a function object for examination.
+
+	Example:
+
+	(untag car)  =>  #(10 8 19 1 5 0 30 21 16 14 2 23 5 13)
+
+
+	** SPECIAL VARIABLES *******************************************
+
+	-- ** ----------------------------------------------------------
+
+	The value most recently printed on the REPL. The value of
+	this variable will not be changed by by aborted or erroneous
+	computations.
+
+	Examples:
+
+	(mkvec 5 '_)      =>  #(_ _ _ _ _)
+	(vset ** 2 'foo)  =>  #(_ _ foo _ _)
+
+	(expt 2 9)  =>  512
+	(* 2 **)    =>  1024
+
+
+	-- *ERRTAG* ----------------------------------------------------
+	-- *ERRVAL* ----------------------------------------------------
+
+	These variables are used internally by the CATCH-ERRORS function.
+	*ERRTAG* holds the catch tag that will be thrown in case of an
+	error and *ERRVAL* holds the value to be delivered in case of an
+	error. These variables should not be touched by any function
+	other than CATCH-ERRORS.
+
+
+	-- *IMAGEFILE* -------------------------------------------------
+
+	The image file from which the current LISP9 session was started
+	or to which the most recent state was dumped. When LISP9 starts
+	up, it will set the value of this variable to the file name of
+	the image being loaded initially. When no image is being loaded,
+	the value will be set to NIL.
+
+	DUMP-IMAGE sets *IMAGEFILE* to its argument when an image file
+	could be written successfully.
+
+
+	-- *QUIET* -----------------------------------------------------
+
+	This variable is set to T when the interpreter was started in
+	quiet mode and otherwise to NIL.
+
+
+	-- *UNWIND* ----------------------------------------------------
+
+	This variable is bound to the unwind stack, i.e., the location
+	where unwind functions are registered and unregistered (see
+	UNWIND).
+
+
+	** APPENDIX ****************************************************
+
+	-- FORMAL SYNTAX -----------------------------------------------
+
+	DEFINITIONS
+
+	<symchar> = member of {abcdefghijklmnopqrstuvwxyz
+	                       0123456789!$%&*+-/:<=>?^_~}
+	            Note: upper case letters will be folded to
+	                  lower case by the reader!
+
+	<digit>   = member of {0123456789}
+
+	<char>    = any ASCII character
+
+	<nl>      = ASCII character 10 (linefeed)
+
+	a := b a | b  =  "a" can be written as "b a" or "b"
+	a*            =  zero or more "a"s
+	a+            =  one or more "a"s
+
+	SYNTAX
+
+	program := expr*
+
+	expr := app | symbol | string | char | fixnum
+	      | pair | list | vector | special
+
+	symbol := <symchar>+
+
+	string := "<char>*"
+
+	char := #\<char> | #\sp | #\nl | #\ht | #\\[0-7]+
+
+	fixnum := <digit>+ | -<digit>+
+
+	pair := (expr . expr)
+
+	list := (expr*)
+
+	vector := #(expr*)
+
+	special := t | nil
+
+	app := (QUOTE expr)
+             | (LAMBDA formals expr*)
+	     | (expr expr*)
+	     | (APPLY expr+ expr)
+	     | (PROG expr*)
+	     | (IF expr expr expr)
+	     | (IF expr expr)
+	     | (IF* expr expr)
+	     | (SETQ symbol expr)
+	     | (DEF symbol expr)
+	     | (MACRO symbol expr)
+
+	formals := symbol | (symbol*) | (symbol+ . symbol)
+
+	ABBREVIATIONS
+
+        (DEFUN (symbol . formals) expr+)
+          =  (DEF symbol (lambda formals expr+))
+
+        (DEFMAC (symbol . formals) expr+)
+          =  (MACRO symbol (lambda formals expr+))
+
+	'expr     =  (QUOTE expr)
+
+	@expr     =  (QQUOTE expr)
+
+	`expr     =  (QQUOTE expr)
+
+	,expr     =  (UNQUOTE expr)
+
+	,@expr    =  (SPLICE expr)
+
+	*************************** THE END ****************************
+

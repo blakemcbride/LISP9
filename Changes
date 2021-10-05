@@ -1,0 +1,75 @@
+"LISP System Implementation", post-publication changes
+
+[!] indicates changes that break compatibility with the book version
+
+20200220
+	Fixed a mistake in the description of IF*. Thanks, Brian!
+
+20191221
+	Fixed various typos in the reference manual. Thanks to
+	Wojciech Gac for pointing them out!
+
+20190812
+	string(Obmap) could be undefined in gc().
+
+20190804
+	Fixed GC leak in intern() function.
+
+20190728
+	Corrected formal grammar (lisp9.txt), added RENAME test to
+	test suite.
+
+20190726
+	Added new opcodes (FLUSH, RENAME) to the disassembler.
+
+20190724
+	Made WITH-INFILE and WITH-OUTFILE restore the previous current
+	I/O port when exiting their dynamic extent via non-local exit.
+
+	Made WITH-INPORT and WITH-OUTPORT close their respective file
+	when exiting their dynamic extent via non-local exit.
+
+20190719
+	Added RENAME function for renaming files.
+
+20190711
+	Added FLUSH function for writing pending output to ports.
+
+20190705
+	Reset error handler (*Errtag*) in the REPL.
+
+20190627
+	Even though the result if SYMNAME is constant, it still has
+	to copy the name, because vector atoms cannot share their
+	payloads.
+
+20190626 [!]
+	Comments are now the usual, non-persistent, reader-level
+	comments. It was a nice experiment, but in the end comments
+	as objects caused more trouble than benefit.
+
+20190626
+	Reference trace printed in wrong order in error messages.
+
+20190617 [!]
+	SYMNAME returns an immutable string now.
+
+20190615
+	vector(Obarray) could be undefined in gc().
+	Thanks, Alexander Shendi!
+
+20190613
+	Added README.
+	Thanks, Harsh Raju Chamarthi!
+
+20190610
+	Sending SIGINT while running an image via START drops you to
+	the REPL. Did exit LISP9 before.
+
+20190603
+	Fixed GC leak in cons3() with ptag==CONST_TAG.
+
+20190603
+	veclen(Obarray) could be undefined in gc().
+	Thanks, Alexander Shendi!
+

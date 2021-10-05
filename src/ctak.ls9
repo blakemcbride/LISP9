@@ -1,0 +1,14 @@
+(defun (ctak x y z)
+  (defun (ctak-aux k x y z)
+    (if (not (< y x))
+        (throw* k z)
+        (catch*
+          (lambda (k)
+            (ctak-aux
+              k
+              (catch* (lambda (k) (ctak-aux k (- x 1) y z)))
+              (catch* (lambda (k) (ctak-aux k (- y 1) z x)))
+              (catch* (lambda (k) (ctak-aux k (- z 1) x y))))))))
+  (catch (lambda (k) (ctak-aux k x y z))))
+
+(ctak 18 12 6)

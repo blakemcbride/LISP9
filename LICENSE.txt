@@ -1,0 +1,8 @@
+        LISP9 -- an experimental LISP system
+        Nils M Holm, 2018, 2019
+        In the public domain.
+
+        If your country does not have a concept like the public
+        domain, the Creative Common Zero (CC0) licence applies.
+        See https://creativecommons.org/publicdomain/zero/1.0/
+

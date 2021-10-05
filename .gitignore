@@ -1,0 +1,7 @@
+*.o
+*.obj
+*~
+*.bak
+ls9
+ls9.image
+

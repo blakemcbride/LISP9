@@ -1,0 +1,6 @@
+(defun (nreconc n m)
+  (if (null n)
+      m
+      (let ((h (cdr n)))
+        (setcdr n m)
+        (nreconc h n))))

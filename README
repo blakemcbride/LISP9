@@ -1,0 +1,63 @@
+
+	LISP9 -- an experimental LISP system
+	Nils M Holm, 2018, 2019
+	In the public domain.
+
+	If your country does not have a concept like the public
+	domain, the Creative Common Zero (CC0) licence applies.
+	See https://creativecommons.org/publicdomain/zero/1.0/
+
+	In order to build LISP9, an ANSI C89 / ISO C90 compiler is
+	needed. In addition, the rename() system call has to be
+	present, but it can be removed from the code without any
+	consequences other than the RENAME function not working.
+
+	To build the LISP9 system, run "make". Without make, run
+
+	cc -O2 -o ls9 ls9.c
+	echo '(dump-image "ls9.image")' | ./ls9 -q
+
+	To make sure that the system works properly, run "make test"
+	or "./ls9 test.ls9".
+
+	For a summary of command line options, run "./ls9 -h".
+
+	To build an image containing the online help system, run
+
+	echo "(save)" | ./ls9 -l src/help.ls9
+
+	When starting LISP9 for the next time, you can then use
+
+	,h,t          to view the table of contents
+	,h,t chapter  to view the contents of a chapter
+	,h  topic     to view the section about a given topic
+
+	To build an image containing the online help system, the
+	LAM disassembler, and the pretty printer (grinder), run
+
+	echo "(save)" | \
+	     ./ls9 -l src/help.ls9 -l src/disasm.ls9 -l src/grind.ls9
+
+	To start the interpreter in interactive mode, run
+
+	./ls9
+
+	The interpreter prompt is a single "*". Expressions typed at
+	the prompt will evaluate and print their results. The most
+	recently printed result will be bound to the variable **, so
+	you can reuse the result without typing it, e.g.:
+
+	* (mapcar list '(a b c) '(1 2 3))
+	((a 1) (b 2) (c 3))
+	* (assq 'b **)
+	(b 2)
+
+	There are a few shortcuts that work only on the REPL:
+
+	,c command   will pass "command" to the shell
+	,h topic     will display sections of the manual (see above)
+	,l file      will load "file.ls9".
+
+	To end a LISP9 session, send an EOF marker (control-D on Unix)
+	to the system or enter (quit).
+

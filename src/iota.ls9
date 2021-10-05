@@ -1,0 +1,7 @@
+(defun (iota x y)
+  (defun (iota3 x y r)
+    (if (>= x y)
+        (nrever r)
+        (iota3 (+ 1 x) y (cons x r))))
+  (iota3 x y nil))
+

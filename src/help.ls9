@@ -1,0 +1,139 @@
+;;; LISP9 HELP
+;;; Nils M Holm, 2018
+;;; In the public domain
+
+(def *ttylines* 24)
+
+(defun (help . s)
+
+  (def helpfile "lisp9.txt")
+
+  (def line 0)
+  (def first t)
+
+  (defun (subs= u n s)
+    (let ((ku (ssize u))
+          (ks (ssize s)))
+      (and (>= ks (+ n ku))
+           (si= u (substr s n (+ n ku))))))
+
+  (defun (findstri u s)
+    (let ((ku (ssize u))
+          (ks (ssize s)))
+      (let loop ((i 0))
+        (cond ((> i (- ks ku)) nil)
+              ((si= u (substr s i (+ i ku))) i)
+              (else (loop (+ 1 i)))))))
+
+  (defun (topicp s ln)
+    (or (and (s= "" s)
+             (subs= "\t-- " 0 ln))
+        (subs= (sconc "\t-- \50" s " ") 0 ln)
+        (subs= (sconc "\t-- \50" s ")") 0 ln)
+        (subs= (sconc "\t-- " s " ") 0 ln)))
+
+  (defun (headlnp s ln)
+    (subs= (sconc "\t** " s) 0 ln))
+
+  (defun (trim s)
+    (do ((i (- (ssize s) 1) (- i 1)))
+        ((or (< i 0)
+             (not (c= #\sp (sref s i))))
+          (do ((j 0 (+ 1 j)))
+              ((or (>= j i)
+                   (not (c= #\sp (sref s j))))
+                (substr s j (+ 1 i)))))))
+
+  (defun (trimhd s)
+    (do ((i (- (ssize s) 1) (- i 1)))
+        ((and (not (c= #\- (sref s i)))
+              (not (c= #\* (sref s i))))
+          (substr s 4 (+ 1 i)))))
+
+  (defun (more)
+    (setq line (+ 1 line))
+    (cond ((or (= 0 *ttylines*)
+               (< (+ 2 line) *ttylines*)))
+          (else
+            (setq line 0)
+            (princ "-- more (q=quit) --")
+            (if first (readln))
+            (setq first nil)
+            (let ((s (readln)))
+              (and (not (eofp s))
+                   (not (memv #\q (strlist s))))))))
+
+  (defun (princln s)
+    (cond ((more)
+            (princ s)
+            (terpri))
+          (else
+            nil)))
+
+  (defun (toc s)
+    (let* ((s  (substr s 2 (ssize s)))
+           (s  (trim s))
+           (kw (if (s= "" s) nil s))
+           (kf nil))
+      (with-inport helpfile
+        (lambda (h)
+          (let loop ((s (readln h)))
+            (cond ((eofp s))
+                  ((topicp "" s)
+                    (if (or kf (not kw))
+                        (if (princln (trimhd s))
+                            (loop (readln h)))
+                        (loop (readln h))))
+                  ((headlnp "" s)
+                    (cond (kf)
+                          ((or (not kw)
+                               (findstri kw s))
+                            (if kw (setq kf t))
+                            (if (and (princln "")
+                                     (princln (trimhd s)))
+                                (loop (readln h))))
+                          (else
+                            (loop (readln h)))))
+                  (else
+                    (loop (readln h)))))))))
+
+  (defun (extract h s)
+    (let loop ((s1 (readln h))
+               (s2 s))
+      (cond ((eofp s1))
+            ((eofp s2)
+              (princln s1))
+            ((and (s= "" s1)
+                  (s= "" s2)))
+            ((princln s2)
+              (loop (readln h) s1)))))
+
+  (defun (topic top)
+    (with-inport helpfile
+      (lambda (h)
+        (let loop ((s    (readln h))
+                   (tops nil))
+          (cond ((eofp s))
+                ((topicp top s)
+                  (do ((a (nrever tops) (cdr a)))
+                      ((null a))
+                      (princln (car a)))
+                  (extract h s))
+                ((topicp "" s)
+                  (loop (readln h)
+                        (cons s tops)))
+                (else
+                  (loop (readln h) nil)))))))
+
+  (defun (usage)
+    (princ
+      (sconc
+        ",h topic      =  describe topic\n"
+        ",h,t          =  table of contents\n"
+        ",h,t chapter  =  list chapter\n"))
+    t)
+
+  (let ((s (if (null s) nil (car s))))
+    (cond ((null s) (usage))
+          ((subs= ",t" 0 s) (toc s))
+          (else (topic s)))))

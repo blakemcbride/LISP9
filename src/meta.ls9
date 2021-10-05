@@ -1,0 +1,78 @@
+(defmac (label x f)
+  @(labels ((,x ,f)) ,x))
+
+(def xeval
+  (quote
+    (label xeval
+      (lambda (x e)
+        (cond ((atom x)
+                ((label assoc
+                   (lambda (x a)
+                     (cond ((eq nil a) nil)
+                           ((eq x (caar a))
+                             (cadr (car a)))
+                           (t (assoc x (cdr a))))))
+                 x e))
+              ((atom (car x))
+                (cond ((eq (car x) (quote quote))
+                        (cadr x))
+                      ((eq (car x) (quote atom))
+                        (atom (xeval (cadr x) e)))
+                      ((eq (car x) (quote eq))
+                        (eq (xeval (cadr x) e)
+                            (xeval (cadr (cdr x)) e)))
+                      ((eq (car x) (quote car))
+                        (car (xeval (cadr x) e)))
+                      ((eq (car x) (quote cdr))
+                        (cdr (xeval (cadr x) e)))
+                      ((eq (car x) (quote caar))
+                        (car (car (xeval (cadr x) e))))
+                      ((eq (car x) (quote cadr))
+                        (car (cdr (xeval (cadr x) e))))
+                      ((eq (car x) (quote cons))
+                        (cons (xeval (cadr x) e)
+                              (xeval (cadr (cdr x)) e)))
+                      ((eq (car x) (quote cond))
+                        ((label evcon
+                           (lambda (c e)
+                             (cond ((xeval (caar c) e)
+                                     (xeval (cadr (car c)) e))
+                                   (t (evcon (cdr c) e)))))
+                         (cdr x) e))
+                      (t (xeval (cons (xeval (car x) e)
+                                      (cdr x))
+                                e))))
+              ((eq (caar x) (quote lambda))
+                (xeval
+                  (cadr (cdr (car x)))
+                  ((label bind
+                     (lambda (v a ee)
+                       (cond ((eq v nil) ee)
+                             (t (bind
+                                  (cdr v)
+                                  (cdr a)
+                                  (cons (cons (car v)
+                                              (cons (xeval (car a) e)
+                                                    nil))
+                                        ee))))))
+                   (cadr (car x)) (cdr x) e)))
+              ((eq (caar x) (quote label))
+                (xeval (cons (cadr (cdr (car x))) (cdr x))
+                       (cons (cons (cadr (car x)) (cons (car x) nil))
+                             e))))))))
+
+(def append
+ '((label append
+          (lambda (a b)
+            (cond ((eq a nil) b)
+                  (t (cons (car a)
+                           (append (cdr a)
+                                    b))))))
+        (quote (a b c))
+        (quote (d e f))))
+
+; (print ((eval xeval) append '((t t))))
+
+; (print ((eval xeval) @(,xeval ',append '((t t))) `((t t))))
+
+; (print ((eval xeval) @(,xeval '(,xeval ',append '((t t))) '((t t))) '((t t))))

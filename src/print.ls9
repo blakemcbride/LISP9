@@ -1,0 +1,211 @@
+;;; Page Formatter
+;;; Nils M Holm, 2018
+;;; In the public domain
+
+(def plen   72)
+(def llen   80)
+(def outp   (outport))
+(def lead   4)
+(def margin 0)
+(def title  "")
+(def troff  nil)
+(def dotoc  nil)
+
+(def line   1)
+(def page   1)
+(def toc    nil)
+
+(defun (expand s)
+  (let ((k (ssize s)))
+    (let loop ((i 0)
+               (j 0)
+               (x nil))
+      (cond ((>= i k)
+              (liststr (nrever x)))
+            ((c= #\ht (sref s i))
+              (let tab ((n (- 8 (rem j 8)))
+                        (j j)
+                        (x x))
+                (cond ((= 0 n)
+                        (loop (+ 1 i) j x))
+                      (else
+                        (tab (- n 1) (+ 1 j) (cons #\sp x))))))
+            (else
+              (loop (+ 1 i) (+ 1 j) (cons (sref s i) x)))))))
+
+(defun (escape s)
+  (let ((k (ssize s)))
+    (let loop ((i 0)
+               (x (list #\& #\\)))
+      (cond ((>= i k)
+              (liststr (nrever x)))
+            ((c= #\\ (sref s i))
+              (loop (+ 1 i) (cons #\\ (cons #\\ x))))
+            (else
+              (loop (+ 1 i) (cons (sref s i) x)))))))
+
+(defun (output s)
+  (princ s outp))
+
+(defun (spaces n)
+  (cond ((not (= 0 n))
+          (output " ")
+          (spaces (- n 1)))))
+
+(defun (header)
+  (output "\n")
+  (spaces (div (- (+ llen margin) (ssize title)) 2))
+  (output title)
+  (do ((i 0 (+ 1 i)))
+      ((= i (- lead 2)))
+    (output "\n")))
+
+(defun (footer)
+  (do ((i 0 (+ 1 i)))
+      ((= i (- lead 2)))
+    (output "\n"))
+  (let ((s (format page)))
+    (spaces (div (- (+ llen margin) 6 (ssize s)) 2))
+    (output "-- ")
+    (output s)
+    (if troff
+        (output " --\n.bp\n")
+        (output " --\14"))
+    (setq page (+ 1 page))))
+
+(defun (break)
+  (footer)
+  (header)
+  (setq line 1))
+
+(defun (prline s)
+  (if (> line (- plen (* 2 lead)))
+      (break))
+  (setq line (+ 1 line))
+  (if (> margin 0) (spaces margin))
+  (let* ((s (if troff
+                (escape (expand s))
+                (expand s)))
+         (k (ssize s))
+         (s (if (< margin 0)
+                (if (< k (- margin))
+                    ""
+                    (substr s (- margin) (ssize s)))
+                s)))
+    (output s)
+    (terpri outp)))
+
+(defun (fillpage)
+  (do ((x line (+ 1 x)))
+      ((>= x (- plen (* 2 lead))))
+    (prline "")))
+
+(defun (prfile) 
+  (header)
+  (let loop ((s (readln)))
+    (cond ((eofp s))
+          (else
+            (if (and (>= (ssize s) 4)
+                     (s= "\t** " (substr s 0 4)))
+                (setq toc (cons (list s page (sref s 1))
+                                toc)))
+            (prline s)
+            (loop (readln))))))
+
+(defun (trim s)
+  (let ((s (substr s 4 (ssize s))))
+    (let loop ((i (- (ssize s) 1)))
+      (if (or (c= #\* (sref s i))
+              (c= #\- (sref s i)))
+          (loop (- i 1))
+          (let loop ((i i))
+            (if (c= #\sp (sref s i))
+                (loop (- i 1))
+                (substr s 0 (+ 1 i))))))))
+
+(defun (prtoc)
+  (defun (entry s)
+    (prline (sconc (if (c= (caddr s) #\*) "\n" "")
+                   "        "
+                   (numstr (cadr s))
+                   "  "
+                   (trim (car s)))))
+  (fillpage)
+  (break)
+  (prline "        TABLE OF CONTENTS")
+  (prline "")
+  (foreach entry (nrever toc)))
+
+(defun (prolog)
+  (cond (troff
+         (foreach
+           (lambda (x) (princ x) (terpri))
+           '(".nf"
+             ".ft CB"
+             ".ps 11"
+             ".vs 13")))))
+
+(defun (usage)
+  (set-outport (errport))
+  (princ
+    (sconc
+      "Usage: print [-l leading-space]\n"
+      "             [-n line-length]\n"
+      "             [-m left-margin]\n"
+      "             [-o output-file]\n"
+      "             [-p paper-length]\n"
+      "             [-t document-title]\n"
+      "             [-C] write contents\n"
+      "             [-T] TROFF output\n"
+      "             [file ...]\n"))
+  (quit))
+
+(defun (opt o)
+  (if (null (cdr o))
+      (usage)
+      (cadr o)))
+
+(defun (getopts)
+  (let loop ((o (cmdline)))
+    (cond ((null o)
+            nil)
+          ((not (c= #\- (sref (car o) 0)))
+            o)
+          ((s= "-l" (car o))
+            (setq lead (strnum (opt o)))
+            (loop (cddr o)))
+          ((s= "-m" (car o))
+            (setq margin (strnum (opt o)))
+            (loop (cddr o)))
+          ((s= "-n" (car o))
+            (setq llen (strnum (opt o)))
+            (loop (cddr o)))
+          ((s= "-o" (car o))
+            (setq outp (open-outfile (opt o)))
+            (loop (cddr o)))
+          ((s= "-p" (car o))
+            (setq plen (strnum (opt o)))
+            (loop (cddr o)))
+          ((s= "-t" (car o))
+            (setq title (opt o))
+            (loop (cddr o)))
+          ((s= "-C" (car o))
+            (setq dotoc t)
+            (loop (cdr o)))
+          ((s= "-T" (car o))
+            (setq troff t)
+            (loop (cdr o)))
+          (else
+            (usage)))))
+
+(let ((f (getopts)))
+  (prolog)
+  (if (null f)
+      (prfile)
+      (let loop ((f f))
+        (cond ((not (null f))
+                (with-infile (car f) prfile)
+                (loop (cdr f))))))
+  (if dotoc (prtoc))
+  (fillpage)
+  (footer))

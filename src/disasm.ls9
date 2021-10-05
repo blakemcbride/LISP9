@@ -1,0 +1,139 @@
+;;; LISP9 DISASM
+;;; Nils M Holm, 2018
+;;; In the public domain
+
+(defun (iota n)
+  (defun (i n a)
+    (if (< n 0)
+        a
+        (i (- n 1) (cons n a))))
+  (i (- n 1) nil))
+
+(defmac (enum syms . body)
+  (let* ((k  (length syms))
+         (ns (iota k)))
+    @((lambda ,syms . ,body) . ,ns)))
+
+(defun (disasm* p)
+  (enum (op:ill op:applis op:applist op:apply op:tailapp op:quote op:arg
+	 op:ref op:push op:pushtrue op:pushval op:pop op:drop op:jmp
+	 op:brf op:brt op:halt op:catchstar op:throwstar op:closure
+	 op:mkenv op:propenv op:cpref op:cparg op:enter op:entcol
+	 op:return op:setarg op:setref op:macro op:abs op:alphac op:atom
+	 op:bitop op:caar op:cadr op:car op:cdar op:cddr op:cdr
+	 op:cequal op:cgrtr op:cgteq op:char op:charp op:charval
+	 op:cless op:close_port op:clteq op:cmdline op:conc op:cons
+	 op:constp op:ctagp op:delete op:div op:downcase op:dump_image
+	 op:eofp op:eq op:equal op:error op:error2 op:errport op:eval
+	 op:existsp op:fixp op:flush op:format op:funp op:gc op:gensym
+	 op:grtr op:gteq op:inport op:inportp op:less op:liststr
+	 op:listvec op:load op:lowerc op:lteq op:max op:min op:minus
+	 op:mkstr op:mkvec op:mx op:mx1 op:nconc op:negate op:nreconc
+	 op:null op:numeric op:numstr op:obtab op:open_infile
+	 op:open_outfile op:outport op:outportp op:pair op:peekc op:plus
+	 op:prin op:princ op:quit op:read op:readc op:reconc op:rem
+	 op:rename op:sconc op:sequal op:setcar op:setcdr op:set_inport
+	 op:set_outport op:sfill op:sgrtr op:sgteq op:siequal op:sigrtr
+	 op:sigteq op:siless op:silteq op:sless op:slteq op:sref op:sset
+	 op:ssize op:stringp op:strlist op:strnum op:substr op:subvec
+	 op:symbol op:symbolp op:symname op:symtab op:syscmd op:times
+	 op:untag op:upcase op:upperc op:vconc op:veclist op:vectorp
+	 op:vfill op:vref op:vset op:vsize op:whitec op:writec)
+  
+    (let ((mnemonics
+           (listvec
+             '(ill applis applist apply tailapp quote arg ref push
+               pushtrue pushval pop drop jmp brf brt halt catch* throw*
+               closure mkenv propenv cpref cparg enter entcol return
+               setarg setref macro abs alphac atom bitop caar cadr car
+	       cdar cddr cdr c= c> c>= char charp charval c< close-port
+	       c<= cmdline conc cons constp ctagp delete div downcase
+	       dump-image eofp eq = error error2 errport eval existsp
+	       fixp flush format funp gc gensym > >= inport inportp <
+	       liststr listvec load lowerc <= max min - mkstr mkvec mx
+	       mx1 nconc negate nreconc null numeric numstr obtab
+	       open-infile open-outfile outport outportp pair peekc +
+	       prin princ quit read readc reconc rem rename sconc s=
+	       setcar setcdr set-inport set-outport sfill s> s>= si= si>
+	       si>= si< si<= s< s<= sref sset ssize stringp strlist
+	       strnum substr subvec symbol symbolp symname symtab syscmd
+	       * untag upcase upperc vconc veclist vectorp vfill vref
+	       vset vsize whitec writec)))
+  
+         (g2 (list op:quote op:arg op:pushval op:jmp op:brf op:brt
+                   op:closure op:mkenv op:enter op:entcol op:setarg
+                   op:setref op:macro))
+  
+         (g3 (list op:ref op:cparg op:cpref)))
+  
+      (let ((mnemo (lambda (op)
+              (vref mnemonics op)))
+            (arg (lambda (h l)
+              (orb (shlb h 8) l))))
+
+        (let loop ((bc  (mapcar charval (strlist (untag p))))
+                   (dis '()))
+          (cond ((null bc)
+                  (nrever dis))
+                ((= (car bc) op:quote)
+                  (let ((a (arg (cadr bc) (caddr bc))))
+                    (loop (cdddr bc)
+                          (cons (list (mnemo (car bc))
+                                      (vref (obtab) a))
+                                dis))))
+                ((= (car bc) op:ref)
+                  (let ((a (arg (cadddr bc) (car (cddddr bc)))))
+                    (loop (cdddr (cddr bc))
+                          (cons (list (mnemo (car bc))
+                                      (arg (cadr bc) (caddr bc))
+                                      (vref (symtab) a))
+                                dis))))
+                ((memv (car bc) g3)
+                  (loop (cdddr (cddr bc))
+                        (cons (list (mnemo (car bc))
+                                    (arg (cadr bc) (caddr bc))
+                                    (arg (cadddr bc) (car (cddddr bc))))
+                              dis)))
+                ((memv (car bc) g2)
+                  (loop (cdddr bc)
+                        (cons (list (mnemo (car bc))
+                                    (arg (cadr bc) (caddr bc)))
+                              dis)))
+                (else
+                  (loop (cdr bc)
+                        (cons (list (mnemo (car bc)))
+                              dis)))))))))
+
+(defun (disasm p)
+
+  (def opsize 2)
+
+  (defun (numlen x)
+    (ssize (numstr x)))
+
+  (defun (symlen x)
+    (ssize (symname x)))
+
+  (defun (spaces n)
+    (cond ((> n 0)
+            (writec #\sp)
+            (spaces (- n 1)))))
+
+  (let* ((d (disasm* p))
+         (k (+ 1 (fold max 0 (mapcar symlen (mapcar car d)))))
+         (a 0))
+    (foreach
+      (lambda (x)
+        (spaces (- 5 (numlen a)))
+        (princ a)
+        (princ #\sp)
+        (princ (car x))
+        (cond ((pair (cdr x))
+                (spaces (- k (symlen (car x))))
+                (prin (cadr x))
+                (cond ((pair (cddr x))
+                        (princ #\sp)
+                        (prin (caddr x))))))
+        (terpri)
+        (setq a (+ a 1 (* opsize (- (length x) 1)))))
+      d)))
