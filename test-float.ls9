@@ -1,0 +1,747 @@
+;;; LISP9 Floating Point Test Suite
+
+;; Prelude
+
+(def *Verbose* (and (> (length (cmdline)) 0)
+                    (s= (car (cmdline)) "-v")))
+
+(def Errors 0)
+
+(defun (fail expr result expected port)
+  (princ "test failed: " port)
+  (prin expr port)
+  (terpri port)
+  (princ "got result:  " port)
+  (prin result port)
+  (terpri port)
+  (princ "expected:    " port)
+  (prin expected port)
+  (terpri port))
+
+(defun (test3 expr result expected)
+  (cond (*Verbose*
+          (prin expr)
+          (princ " => ")
+          (prin result)
+          (print)))
+  (cond ((not (equal result expected))
+           (setq Errors (+ 1 Errors))
+           (fail expr result expected (outport))
+           (fail expr result expected (open-outfile "test-float.log" t)))))
+
+(defmac (test form expected)
+  @(test3 ',form ,form ,expected))
+
+;; Approximate comparison for transcendental results
+(defun (approx a b)
+  (< (abs (- a b)) 0.0000001))
+
+(defun (test-approx3 expr result expected)
+  (cond (*Verbose*
+          (prin expr)
+          (princ " => ")
+          (prin result)
+          (print)))
+  (cond ((not (approx result expected))
+           (setq Errors (+ 1 Errors))
+           (fail expr result expected (outport))
+           (fail expr result expected (open-outfile "test-float.log" t)))))
+
+(defmac (test~ form expected)
+  @(test-approx3 ',form ,form ,expected))
+
+;;; ============================================================
+;;; 1. Float Literal Parsing
+;;; ============================================================
+
+;; Basic decimal floats
+(test 0.0 0.0)
+(test 1.0 1.0)
+(test -1.0 -1.0)
+(test 3.14 3.14)
+(test -3.14 -3.14)
+(test 0.5 0.5)
+(test -0.5 -0.5)
+(test 100.001 100.001)
+
+;; Leading/trailing zeros
+(test 0.0 0.0)
+(test 00.00 0.0)
+
+;; Scientific notation
+(test 1e0 1.0)
+(test 1e1 10.0)
+(test 1e2 100.0)
+(test 1e10 10000000000.0)
+(test 1e-1 0.1)
+(test 1e-3 0.001)
+(test 1.5e2 150.0)
+(test 1.5e-2 0.015)
+(test -2.5e3 -2500.0)
+(test -2.5e-3 -0.0025)
+(test 1E2 100.0)
+(test 1.5E-2 0.015)
+
+;; Very small and very large
+(test 1e-300 1e-300)
+(test 1e300 1e300)
+
+;; Positive sign in exponent
+(test 1e+2 100.0)
+(test 1.5e+3 1500.0)
+
+;;; ============================================================
+;;; 2. Type Predicates
+;;; ============================================================
+
+;; floatp
+(test (floatp 3.14) t)
+(test (floatp -0.0) t)
+(test (floatp 1e10) t)
+(test (floatp 0) nil)
+(test (floatp 42) nil)
+(test (floatp "hello") nil)
+(test (floatp #\a) nil)
+(test (floatp nil) nil)
+(test (floatp t) nil)
+(test (floatp '(1 2)) nil)
+(test (floatp 'foo) nil)
+
+;; fixp (unchanged behavior)
+(test (fixp 42) t)
+(test (fixp 0) t)
+(test (fixp -1) t)
+(test (fixp 3.14) nil)
+(test (fixp 0.0) nil)
+(test (fixp "hello") nil)
+
+;; numberp
+(test (numberp 42) t)
+(test (numberp -1) t)
+(test (numberp 0) t)
+(test (numberp 3.14) t)
+(test (numberp 0.0) t)
+(test (numberp -2.5) t)
+(test (numberp 1e10) t)
+(test (numberp "42") nil)
+(test (numberp #\0) nil)
+(test (numberp nil) nil)
+(test (numberp t) nil)
+(test (numberp '(1)) nil)
+(test (numberp 'x) nil)
+
+;;; ============================================================
+;;; 3. Conversions
+;;; ============================================================
+
+;; fixnum->float
+(test (floatp (fixnum->float 0)) t)
+(test (fixnum->float 0) 0.0)
+(test (fixnum->float 1) 1.0)
+(test (fixnum->float -1) -1.0)
+(test (fixnum->float 42) 42.0)
+(test (fixnum->float -100) -100.0)
+(test (fixnum->float 1000000) 1000000.0)
+
+;; float->fixnum (truncates toward zero)
+(test (fixp (float->fixnum 3.0)) t)
+(test (float->fixnum 3.0) 3)
+(test (float->fixnum 3.7) 3)
+(test (float->fixnum 3.2) 3)
+(test (float->fixnum -3.7) -3)
+(test (float->fixnum -3.2) -3)
+(test (float->fixnum 0.0) 0)
+(test (float->fixnum -0.0) 0)
+(test (float->fixnum 0.999) 0)
+(test (float->fixnum -0.999) 0)
+(test (float->fixnum 1.0) 1)
+(test (float->fixnum -1.0) -1)
+
+;;; ============================================================
+;;; 4. Addition (+)
+;;; ============================================================
+
+;; fixnum + fixnum stays fixnum
+(test (fixp (+ 1 2)) t)
+(test (+ 1 2) 3)
+
+;; float + float stays float
+(test (floatp (+ 1.0 2.0)) t)
+(test (+ 1.0 2.0) 3.0)
+(test (+ 0.1 0.2) 0.30000000000000004)
+
+;; mixed promotes to float
+(test (floatp (+ 1 2.0)) t)
+(test (floatp (+ 1.0 2)) t)
+(test (+ 1 2.5) 3.5)
+(test (+ 2.5 1) 3.5)
+(test (+ 0 3.14) 3.14)
+(test (+ 3.14 0) 3.14)
+
+;; identity
+(test (+ 0.0 0.0) 0.0)
+
+;; negative floats
+(test (+ -1.5 -2.5) -4.0)
+(test (+ -1.5 2.5) 1.0)
+(test (+ 1.5 -2.5) -1.0)
+
+;; variadic
+(test (+ 1.0 2.0 3.0) 6.0)
+(test (+ 1 2 3.0) 6.0)
+(test (+) 0)
+
+;;; ============================================================
+;;; 5. Subtraction (-)
+;;; ============================================================
+
+;; fixnum - fixnum stays fixnum
+(test (fixp (- 5 3)) t)
+(test (- 5 3) 2)
+
+;; float - float
+(test (floatp (- 5.0 3.0)) t)
+(test (- 5.0 3.0) 2.0)
+
+;; mixed
+(test (floatp (- 5 3.0)) t)
+(test (- 5 3.0) 2.0)
+(test (- 5.0 3) 2.0)
+(test (- 10 3.5) 6.5)
+(test (- 3.5 10) -6.5)
+
+;; unary negation
+(test (- 3.5) -3.5)
+(test (- -3.5) 3.5)
+(test (- 0.0) 0.0)
+(test (fixp (- 5)) t)
+(test (- 5) -5)
+
+;; variadic
+(test (- 10.0 3.0 2.0) 5.0)
+(test (- 10 3 2.0) 5.0)
+
+;;; ============================================================
+;;; 6. Multiplication (*)
+;;; ============================================================
+
+;; fixnum * fixnum stays fixnum
+(test (fixp (* 2 3)) t)
+(test (* 2 3) 6)
+
+;; float * float
+(test (floatp (* 2.0 3.0)) t)
+(test (* 2.0 3.0) 6.0)
+(test (* 0.5 0.5) 0.25)
+
+;; mixed
+(test (floatp (* 2 3.0)) t)
+(test (* 2 3.0) 6.0)
+(test (* 3.0 2) 6.0)
+(test (* 0 3.14) 0.0)
+(test (* 3.14 0) 0.0)
+
+;; identity and zero
+(test (* 1 3.14) 3.14)
+(test (* 3.14 1) 3.14)
+
+;; negative
+(test (* -2.0 3.0) -6.0)
+(test (* 2.0 -3.0) -6.0)
+(test (* -2.0 -3.0) 6.0)
+
+;; variadic
+(test (* 2.0 3.0 4.0) 24.0)
+(test (* 2 3 4.0) 24.0)
+(test (*) 1)
+
+;;; ============================================================
+;;; 7. Division (div)
+;;; ============================================================
+
+;; fixnum div stays fixnum (integer division)
+(test (fixp (div 7 2)) t)
+(test (div 7 2) 3)
+(test (div 6 3) 2)
+(test (div -7 2) -3)
+
+;; float div
+(test (floatp (div 7.0 2.0)) t)
+(test (div 7.0 2.0) 3.5)
+(test (div 1.0 3.0) 0.33333333333333331)
+
+;; mixed promotes to float
+(test (floatp (div 7 2.0)) t)
+(test (div 7 2.0) 3.5)
+(test (div 7.0 2) 3.5)
+(test (div 1 3.0) 0.33333333333333331)
+
+;; negative float division
+(test (div -6.0 2.0) -3.0)
+(test (div 6.0 -2.0) -3.0)
+(test (div -6.0 -2.0) 3.0)
+
+;;; ============================================================
+;;; 8. Remainder (rem) - fixnum only
+;;; ============================================================
+
+(test (rem 7 2) 1)
+(test (rem 10 3) 1)
+(test (rem 6 3) 0)
+
+;;; ============================================================
+;;; 9. Comparisons
+;;; ============================================================
+
+;; = (numeric equality)
+(test (= 3.14 3.14) t)
+(test (= 3.14 3.15) nil)
+(test (= 3.0 3) t)
+(test (= 3 3.0) t)
+(test (= 0 0.0) t)
+(test (= 0.0 0) t)
+(test (= -1 -1.0) t)
+(test (= -1.0 -1) t)
+(test (= 1 1.5) nil)
+(test (= 1.5 1) nil)
+
+;; < (less than)
+(test (< 1.0 2.0) t)
+(test (< 2.0 1.0) nil)
+(test (< 1.0 1.0) nil)
+(test (< 1 2.0) t)
+(test (< 1.0 2) t)
+(test (< -1.5 0) t)
+(test (< 0 -1.5) nil)
+(test (< -2.5 -1.5) t)
+(test (< -1.5 -2.5) nil)
+
+;; > (greater than)
+(test (> 2.0 1.0) t)
+(test (> 1.0 2.0) nil)
+(test (> 1.0 1.0) nil)
+(test (> 2 1.0) t)
+(test (> 2.0 1) t)
+(test (> 0 -1.5) t)
+(test (> -1.5 0) nil)
+
+;; <= (less than or equal)
+(test (<= 1.0 2.0) t)
+(test (<= 1.0 1.0) t)
+(test (<= 2.0 1.0) nil)
+(test (<= 1 2.0) t)
+(test (<= 1.0 2) t)
+(test (<= 1 1.0) t)
+(test (<= 1.0 1) t)
+
+;; >= (greater than or equal)
+(test (>= 2.0 1.0) t)
+(test (>= 1.0 1.0) t)
+(test (>= 1.0 2.0) nil)
+(test (>= 2 1.0) t)
+(test (>= 2.0 1) t)
+(test (>= 1 1.0) t)
+(test (>= 1.0 1) t)
+
+;; chained comparisons
+(test (< 1 2.0 3) t)
+(test (< 1 3.0 2) nil)
+(test (> 3.0 2 1) t)
+(test (<= 1 1.0 2 2.0 3) t)
+(test (>= 3.0 3 2.0 2 1) t)
+
+;;; ============================================================
+;;; 10. abs
+;;; ============================================================
+
+(test (abs 3.14) 3.14)
+(test (abs -3.14) 3.14)
+(test (abs 0.0) 0.0)
+(test (floatp (abs 3.14)) t)
+(test (floatp (abs -3.14)) t)
+(test (fixp (abs 5)) t)
+(test (abs 5) 5)
+(test (abs -5) 5)
+
+;;; ============================================================
+;;; 11. max and min
+;;; ============================================================
+
+;; max
+(test (max 1.0 2.0) 2.0)
+(test (max 2.0 1.0) 2.0)
+(test (max 1 2.0) 2.0)
+(test (max 2.0 1) 2.0)
+(test (max -1.0 -2.0) -1.0)
+(test (max 1.0 2.0 3.0) 3.0)
+(test (max 3.0 1.0 2.0) 3.0)
+(test (max 1 2 3.0) 3.0)
+
+;; min
+(test (min 1.0 2.0) 1.0)
+(test (min 2.0 1.0) 1.0)
+(test (min 1 2.0) 1)
+(test (min 2.0 1) 1)
+(test (min -1.0 -2.0) -2.0)
+(test (min 1.0 2.0 3.0) 1.0)
+(test (min 3.0 1.0 2.0) 1.0)
+(test (min 1 2 3.0) 1)
+
+;;; ============================================================
+;;; 12. expt
+;;; ============================================================
+
+;; fixnum expt returns fixnum when possible
+(test (fixp (expt 2 10)) t)
+(test (expt 2 0) 1)
+(test (expt 2 1) 2)
+(test (expt 2 2) 4)
+(test (expt 2 10) 1024)
+(test (expt -3 3) -27)
+(test (expt 10 0) 1)
+(test (expt 0 0) 1)
+(test (expt 0 5) 0)
+(test (expt 1 100) 1)
+(test (expt -1 2) 1)
+(test (expt -1 3) -1)
+
+;; float expt
+(test (floatp (expt 2.0 3.0)) t)
+(test (expt 2.0 3.0) 8.0)
+(test~ (expt 2.0 0.5) 1.4142135623730951)
+(test~ (expt 27.0 0.33333333333333331) 3.0)
+
+;; mixed expt
+(test (floatp (expt 2 0.5)) t)
+(test~ (expt 2 0.5) 1.4142135623730951)
+(test (floatp (expt 2.0 3)) t)
+(test (expt 2.0 3) 8.0)
+
+;; negative exponent with fixnum base -> float
+(test (floatp (expt 2 -1)) t)
+(test (expt 2 -1) 0.5)
+(test (expt 2 -2) 0.25)
+
+;; large fixnum expt that overflows -> float
+(test (floatp (expt 2 40)) t)
+(test (expt 2 40) 1099511627776.0)
+
+;;; ============================================================
+;;; 13. sqrt
+;;; ============================================================
+
+(test (floatp (sqrt 4)) t)
+(test (sqrt 0) 0.0)
+(test (sqrt 0.0) 0.0)
+(test (sqrt 1) 1.0)
+(test (sqrt 1.0) 1.0)
+(test (sqrt 4) 2.0)
+(test (sqrt 4.0) 2.0)
+(test (sqrt 9.0) 3.0)
+(test (sqrt 16) 4.0)
+(test~ (sqrt 2) 1.4142135623730951)
+(test~ (sqrt 2.0) 1.4142135623730951)
+(test (sqrt 0.25) 0.5)
+
+;;; ============================================================
+;;; 14. Trigonometric Functions
+;;; ============================================================
+
+(def pi 3.141592653589793)
+
+;; sin
+(test (floatp (sin 0)) t)
+(test (sin 0) 0.0)
+(test (sin 0.0) 0.0)
+(test~ (sin (div pi 2.0)) 1.0)
+(test~ (sin pi) 0.0)
+(test~ (sin (div pi 6.0)) 0.5)
+
+;; cos
+(test (floatp (cos 0)) t)
+(test (cos 0) 1.0)
+(test (cos 0.0) 1.0)
+(test~ (cos pi) -1.0)
+(test~ (cos (div pi 3.0)) 0.5)
+
+;; tan
+(test (floatp (tan 0)) t)
+(test (tan 0) 0.0)
+(test (tan 0.0) 0.0)
+(test~ (tan (div pi 4.0)) 1.0)
+
+;; asin
+(test (floatp (asin 0)) t)
+(test (asin 0) 0.0)
+(test (asin 0.0) 0.0)
+(test~ (asin 1.0) (div pi 2.0))
+(test~ (asin 0.5) (div pi 6.0))
+(test~ (asin -1.0) (- (div pi 2.0)))
+
+;; acos
+(test (floatp (acos 1)) t)
+(test (acos 1) 0.0)
+(test (acos 1.0) 0.0)
+(test~ (acos 0.0) (div pi 2.0))
+(test~ (acos -1.0) pi)
+(test~ (acos 0.5) (div pi 3.0))
+
+;; atan
+(test (floatp (atan 0)) t)
+(test (atan 0) 0.0)
+(test (atan 0.0) 0.0)
+(test~ (atan 1.0) (div pi 4.0))
+(test~ (atan -1.0) (- (div pi 4.0)))
+
+;; atan2
+(test (floatp (atan2 1 1)) t)
+(test~ (atan2 0 1) 0.0)
+(test~ (atan2 1 0) (div pi 2.0))
+(test~ (atan2 1 1) (div pi 4.0))
+(test~ (atan2 -1 -1) (* -0.75 pi))
+(test~ (atan2 0.0 1.0) 0.0)
+(test~ (atan2 1.0 0.0) (div pi 2.0))
+
+;; atan2 mixed types
+(test~ (atan2 1 1.0) (div pi 4.0))
+(test~ (atan2 1.0 1) (div pi 4.0))
+
+;;; ============================================================
+;;; 15. Exponential and Logarithmic Functions
+;;; ============================================================
+
+;; exp
+(test (floatp (exp 0)) t)
+(test (exp 0) 1.0)
+(test (exp 0.0) 1.0)
+(test~ (exp 1) 2.718281828459045)
+(test~ (exp 1.0) 2.718281828459045)
+(test~ (exp -1) 0.36787944117144233)
+(test~ (exp 2) 7.38905609893065)
+
+;; log (natural logarithm)
+(test (floatp (log 1)) t)
+(test (log 1) 0.0)
+(test (log 1.0) 0.0)
+(test~ (log 2.718281828459045) 1.0)
+(test~ (log 10) 2.302585092994046)
+(test~ (log 0.5) -0.6931471805599453)
+
+;; exp and log are inverses
+(test~ (log (exp 5.0)) 5.0)
+(test~ (exp (log 5.0)) 5.0)
+
+;;; ============================================================
+;;; 16. floor, ceiling, round
+;;; ============================================================
+
+;; floor
+(test (floatp (floor 3.7)) t)
+(test (floor 3.7) 3.0)
+(test (floor 3.0) 3.0)
+(test (floor 3.2) 3.0)
+(test (floor -3.2) -4.0)
+(test (floor -3.7) -4.0)
+(test (floor -3.0) -3.0)
+(test (floor 0.5) 0.0)
+(test (floor -0.5) -1.0)
+(test (floor 0.0) 0.0)
+
+;; floor on fixnum is identity
+(test (fixp (floor 5)) t)
+(test (floor 5) 5)
+(test (floor -5) -5)
+(test (floor 0) 0)
+
+;; ceiling
+(test (floatp (ceiling 3.2)) t)
+(test (ceiling 3.2) 4.0)
+(test (ceiling 3.0) 3.0)
+(test (ceiling 3.7) 4.0)
+(test (ceiling -3.2) -3.0)
+(test (ceiling -3.7) -3.0)
+(test (ceiling -3.0) -3.0)
+(test (ceiling 0.5) 1.0)
+(test (ceiling -0.5) 0.0)
+(test (ceiling 0.0) 0.0)
+
+;; ceiling on fixnum is identity
+(test (fixp (ceiling 5)) t)
+(test (ceiling 5) 5)
+(test (ceiling -5) -5)
+(test (ceiling 0) 0)
+
+;; round
+(test (floatp (round 3.5)) t)
+(test (round 3.5) 4.0)
+(test (round 3.4) 3.0)
+(test (round 3.6) 4.0)
+(test (round -3.5) -3.0)
+(test (round -3.4) -3.0)
+(test (round -3.6) -4.0)
+(test (round 0.5) 1.0)
+(test (round -0.5) 0.0)
+(test (round 0.0) 0.0)
+(test (round 2.0) 2.0)
+
+;; round on fixnum is identity
+(test (fixp (round 5)) t)
+(test (round 5) 5)
+(test (round -5) -5)
+
+;;; ============================================================
+;;; 17. numstr / strnum
+;;; ============================================================
+
+;; numstr with floats
+(test (stringp (numstr 3.14)) t)
+(test (numstr 3.14) "3.14")
+(test (numstr 0.0) "0")
+(test (numstr 1.0) "1")
+(test (numstr -2.5) "-2.5")
+(test (numstr 1e10) "10000000000")
+(test (numstr 1.5e-3) "0.0015")
+
+;; numstr with fixnums still works
+(test (numstr 42) "42")
+(test (numstr 42 16) "2a")
+(test (numstr -1 10) "-1")
+
+;; strnum with float strings
+(test (floatp (strnum "3.14" 10)) t)
+(test (strnum "3.14" 10) 3.14)
+(test (strnum "0.0" 10) 0.0)
+(test (strnum "-2.5" 10) -2.5)
+(test (strnum "1e10" 10) 1e10)
+(test (strnum "1.5e-3" 10) 1.5e-3)
+
+;; strnum with fixnum strings still works
+(test (fixp (strnum "42" 10)) t)
+(test (strnum "42" 10) 42)
+(test (strnum "ff" 16) 255)
+
+;; strnum returns nil for invalid
+(test (strnum "hello" 10) nil)
+(test (strnum "" 10) nil)
+(test (strnum " 1" 10) nil)
+
+;; strnum does not try float for non-decimal radix
+(test (strnum "3.14" 16) nil)
+
+;;; ============================================================
+;;; 18. eqv and equal with floats
+;;; ============================================================
+
+(test (eqv 3.14 3.14) t)
+(test (eqv 3.14 3.15) nil)
+(test (eqv 0.0 0.0) t)
+(test (eqv 3.14 3) nil)
+(test (eqv 3 3.14) nil)
+
+(test (equal 3.14 3.14) t)
+(test (equal 3.14 3.15) nil)
+(test (equal '(1.0 2.0) '(1.0 2.0)) t)
+(test (equal '(1.0 2.0) '(1.0 2.1)) nil)
+
+;;; ============================================================
+;;; 19. Floats in Data Structures
+;;; ============================================================
+
+;; Lists
+(test (car '(3.14 2.71)) 3.14)
+(test (cadr '(3.14 2.71)) 2.71)
+(test (length '(1.0 2.0 3.0)) 3)
+(test (conc '(1.0 2.0) '(3.0 4.0)) '(1.0 2.0 3.0 4.0))
+
+;; Vectors
+(test (vref #(1.0 2.0 3.0) 0) 1.0)
+(test (vref #(1.0 2.0 3.0) 1) 2.0)
+(test (vref #(1.0 2.0 3.0) 2) 3.0)
+(test (vsize #(1.0 2.0 3.0)) 3)
+
+;; Mixed vectors
+(test (vref #(1 2.0 "three") 0) 1)
+(test (vref #(1 2.0 "three") 1) 2.0)
+(test (vref #(1 2.0 "three") 2) "three")
+
+;;; ============================================================
+;;; 20. Floats with Higher-order Functions
+;;; ============================================================
+
+(test (mapcar (lambda (x) (* x 2.0)) '(1 2 3)) '(2.0 4.0 6.0))
+(test (mapcar (lambda (x) (+ x 0.5)) '(1 2 3)) '(1.5 2.5 3.5))
+(test (mapcar (lambda (x) (sqrt x)) '(1 4 9 16)) '(1.0 2.0 3.0 4.0))
+
+;;; ============================================================
+;;; 21. Mixed Arithmetic Chains
+;;; ============================================================
+
+;; Complex expressions
+(test (+ (* 2 3.0) (* 4.0 5)) 26.0)
+(test (- (* 10 0.5) (div 6.0 3)) 3.0)
+(test (sqrt (+ (* 3.0 3.0) (* 4.0 4.0))) 5.0)
+
+;; Fixnum arithmetic is unaffected
+(test (fixp (+ 1 2)) t)
+(test (fixp (* 3 4)) t)
+(test (fixp (- 10 3)) t)
+(test (fixp (div 10 3)) t)
+
+;;; ============================================================
+;;; 22. Edge Cases
+;;; ============================================================
+
+;; Negative zero
+(test (= 0.0 -0.0) t)
+(test (= 0 0.0) t)
+(test (= 0 -0.0) t)
+
+;; Very large / very small
+(test (floatp 1e308) t)
+(test (floatp 1e-308) t)
+(test (> 1e308 1e307) t)
+(test (< 1e-308 1e-307) t)
+
+;; Arithmetic near limits
+(test (floatp (+ 2147483647 1.0)) t)
+(test (+ 2147483647 1.0) 2147483648.0)
+(test (* 1000000 1000000.0) 1000000000000.0)
+
+;; Float used in let binding
+(test (let ((x 3.14)) (* x x)) 9.8596)
+(test (let ((x 2.0) (y 3.0)) (+ x y)) 5.0)
+
+;; Float in lambda closure
+(test ((lambda (x) (* x x)) 3.14) 9.8596)
+(test (let ((f (lambda (x) (+ x 1.0))))
+        (f 41)) 42.0)
+
+;; Recursive with floats
+(test (let loop ((n 10) (acc 0.0))
+        (if (= n 0) acc
+            (loop (- n 1) (+ acc 0.1))))
+      0.9999999999999999)
+
+;;; ============================================================
+;;; 23. Print/Read Round-trip
+;;; ============================================================
+
+;; Verify floats print distinctly from fixnums
+(test (numberp (strnum (numstr 3.14) 10)) t)
+(test (strnum (numstr 42) 10) 42)
+(test (fixp (strnum (numstr 42) 10)) t)
+
+;;; ============================================================
+;;; Postlude
+;;; ============================================================
+
+(cond ((= 0 Errors)
+        (princ "Everything fine!"))
+      (else
+        (princ Errors)
+        (if (> Errors 1)
+            (princ " errors.")
+            (princ " error."))))
+(terpri)
+
+(if (existsp "test-float.log") (delete "test-float.log"))

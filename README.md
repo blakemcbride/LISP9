@@ -24,6 +24,13 @@ though.
 
 ## Notes for this release
 
+Floating point number support was added by Claude Code under the
+direction of Blake McBride.  This includes double-precision floats
+stored in the vector pool, polymorphic arithmetic (automatic
+promotion when mixing fixnums and floats), and math functions
+(sqrt, sin, cos, tan, asin, acos, atan, atan2, exp, log, expt,
+floor, ceiling, round).
+
 Nils has many fine books and implementations of Lisp at [https://www.t3x.org](https://www.t3x.org)
 
 

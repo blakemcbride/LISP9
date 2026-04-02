@@ -5,7 +5,7 @@ CFLAGS=	-g -O2
 all:	ls9 ls9.image # prolog # lisp9.ps
 
 ls9:	ls9.c
-	$(CC) $(CFLAGS) -o ls9 ls9.c
+	$(CC) $(CFLAGS) -o ls9 ls9.c -lm
 
 ls9.image:	ls9 ls9.ls9
 	rm -f ls9.image

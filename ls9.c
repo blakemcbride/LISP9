@@ -8,7 +8,7 @@
  * see https://creativecommons.org/publicdomain/zero/1.0/
  */
 
-#define VERSION "20190812"
+#define VERSION "20260402"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -17,6 +17,7 @@
 #include <limits.h>
 #include <signal.h>
 #include <setjmp.h>
+#include <math.h>
 
 /*
  * Tunable parameters
@@ -123,6 +124,7 @@ cell	Freevec = 0;
 #define T_STRING	(-17)
 #define T_SYMBOL	(-18)
 #define T_VECTOR	(-19)
+#define T_FLOAT		(-20)
 
 /*
  * Basic constructors 
@@ -163,6 +165,11 @@ cell	Freevec = 0;
 
 #define fixp(n) \
 	(!specialp(n) && (tag(n) & ATOM_TAG) && T_FIXNUM == car(n))
+
+#define floatp(n) \
+	(!specialp(n) && (tag(n) & VECTOR_TAG) && T_FLOAT == car(n))
+
+#define numberp(n) (fixp(n) || floatp(n))
 
 #define inportp(n) \
 	(!specialp(n) && (tag(n) & ATOM_TAG) && \
@@ -223,7 +230,11 @@ enum {	OP_ILL, OP_APPLIS, OP_APPLIST, OP_APPLY, OP_TAILAPP, OP_QUOTE,
 	OP_SUBSTR, OP_SUBVEC, OP_SYMBOL, OP_SYMBOLP, OP_SYMNAME,
 	OP_SYMTAB, OP_SYSCMD, OP_TIMES, OP_UNTAG, OP_UPCASE, OP_UPPERC,
 	OP_VCONC, OP_VECLIST, OP_VECTORP, OP_VFILL, OP_VREF, OP_VSET,
-	OP_VSIZE, OP_WHITEC, OP_WRITEC };
+	OP_VSIZE, OP_WHITEC, OP_WRITEC,
+
+	OP_ACOS, OP_ASIN, OP_ATAN, OP_ATAN2, OP_CEILING, OP_COS,
+	OP_EXP, OP_EXPT, OP_FIX2FLO, OP_FLO2FIX, OP_FLOATP, OP_FLOOR,
+	OP_LOG, OP_NUMBERP, OP_ROUND, OP_SIN, OP_SQRT, OP_TAN };
 
 /*
  * I/O functions
@@ -790,6 +801,26 @@ cell unprot(int k) {
 	((((b) < 0) && ((a) > INT_MAX + (b))) || \
 	 (((b) > 0) && ((a) < INT_MIN + (b))))
 
+cell mkfloat(double d) {
+	cell	n;
+
+	n = newvec(T_FLOAT, sizeof(double));
+	memcpy(&Vectors[cdr(n)], &d, sizeof(double));
+	return n;
+}
+
+double floatval(cell n) {
+	double	d;
+
+	memcpy(&d, &Vectors[cdr(n)], sizeof(double));
+	return d;
+}
+
+double numval(cell n) {
+	if (fixp(n)) return (double) fixval(n);
+	return floatval(n);
+}
+
 #define mkchar(c) mkatom(T_CHAR, mkatom((c) & 0xff, NIL))
 
 #define charval(n) (cadr(n))
@@ -1224,6 +1255,10 @@ cell	P_abs, P_alphac, P_atom, P_bitop, P_caar, P_cadr, P_car,
 	P_veclist, P_vconc, P_vectorp, P_vfill, P_vref, P_vset, P_vsize,
 	P_whitec, P_writec;
 
+cell	P_acos, P_asin, P_atan, P_atan2, P_ceiling, P_cos,
+	P_exp, P_expt, P_fix2flo, P_flo2fix, P_floatp, P_floor,
+	P_log, P_numberp, P_round, P_sin, P_sqrt, P_tan;
+
 volatile int	Intr;
 
 int	Inlist = 0;
@@ -1408,6 +1443,24 @@ cell scanfix(char *s, int r, int of) {
 	return mkfix(v);
 }
 
+cell scanfloat(char *s) {
+	char	*end, *p;
+	double	d;
+	int	has_dot_or_exp = 0;
+
+	if (!*s || isspace((unsigned char) *s)) return NIL;
+	for (p = s; *p; p++) {
+		if ('.' == *p || 'e' == *p || 'E' == *p) {
+			has_dot_or_exp = 1;
+			break;
+		}
+	}
+	if (!has_dot_or_exp) return NIL;
+	d = strtod(s, &end);
+	if (end == s || *end != '\0') return NIL;
+	return mkfloat(d);
+}
+
 cell rdsymfix(int c, int r, int sym) {
 	char	name[TOKLEN+1];
 	int	i;
@@ -1422,6 +1475,10 @@ cell rdsymfix(int c, int r, int sym) {
 	rejectc(c);
 	if (TOKLEN == i) rderror("symbol or fixnum too long",
 				mkstr(name, strlen(name)));
+	if (10 == r) {
+		n = scanfloat(name);
+		if (n != NIL) return n;
+	}
 	n = scanfix(name, r, 1);
 	if (n != NIL) return n;
 	if (!sym) rderror("invalid digits after #radixR",
@@ -1658,6 +1715,15 @@ void prfix(cell x) {
 	prints(ntoa(fixval(x), 10));
 }
 
+void prfloat(cell x) {
+	char	buf[40];
+
+	sprintf(buf, "%.15g", floatval(x));
+	if (!strchr(buf, '.') && !strchr(buf, 'e') && !strchr(buf, 'E'))
+		strcat(buf, ".0");
+	prints(buf);
+}
+
 void prstr(int sl, cell x) {
 	int	i, c;
 
@@ -1765,6 +1831,7 @@ void prex(int sl, cell x, int d) {
 	else if (UNDEF == x) prints("#<undef>");
 	else if (charp(x)) prchar(sl, x);
 	else if (fixp(x)) prfix(x);
+	else if (floatp(x)) prfloat(x);
 	else if (symbolp(x)) printb(symname(x));
 	else if (stringp(x)) prstr(sl, x);
 	else if (vectorp(x)) prvec(sl, x, d);
@@ -2474,12 +2541,17 @@ int subr0(cell x) {
 
 int subr1(cell x) {
 	if (x == P_abs)		return OP_ABS;
+	if (x == P_acos)	return OP_ACOS;
+	if (x == P_asin)	return OP_ASIN;
+	if (x == P_atan)	return OP_ATAN;
 	if (x == P_alphac)	return OP_ALPHAC;
 	if (x == P_atom)	return OP_ATOM;
 	if (x == P_caar)	return OP_CAAR;
 	if (x == P_cadr)	return OP_CADR;
 	if (x == P_car)		return OP_CAR;
 	if (x == P_catchstar)	return OP_CATCHSTAR;
+	if (x == P_ceiling)	return OP_CEILING;
+	if (x == P_cos)		return OP_COS;
 	if (x == P_cdar)	return OP_CDAR;
 	if (x == P_cddr)	return OP_CDDR;
 	if (x == P_cdr)		return OP_CDR;
@@ -2496,7 +2568,12 @@ int subr1(cell x) {
 	if (x == P_eofp)	return OP_EOFP;
 	if (x == P_eval)	return OP_EVAL;
 	if (x == P_existsp)	return OP_EXISTSP;
+	if (x == P_exp)		return OP_EXP;
+	if (x == P_fix2flo)	return OP_FIX2FLO;
 	if (x == P_fixp)	return OP_FIXP;
+	if (x == P_flo2fix)	return OP_FLO2FIX;
+	if (x == P_floatp)	return OP_FLOATP;
+	if (x == P_floor)	return OP_FLOOR;
 	if (x == P_flush)	return OP_FLUSH;
 	if (x == P_format)	return OP_FORMAT;
 	if (x == P_funp)	return OP_FUNP;
@@ -2504,23 +2581,29 @@ int subr1(cell x) {
 	if (x == P_liststr)	return OP_LISTSTR;
 	if (x == P_listvec)	return OP_LISTVEC;
 	if (x == P_load)	return OP_LOAD;
+	if (x == P_log)		return OP_LOG;
 	if (x == P_lowerc)	return OP_LOWERC;
 	if (x == P_mx)		return OP_MX;
 	if (x == P_mx1)		return OP_MX1;
 	if (x == P_not)		return OP_NULL;
 	if (x == P_null)	return OP_NULL;
+	if (x == P_numberp)	return OP_NUMBERP;
 	if (x == P_numeric)	return OP_NUMERIC;
+	if (x == P_round)	return OP_ROUND;
+	if (x == P_sin)		return OP_SIN;
 	if (x == P_open_infile) return OP_OPEN_INFILE;
 	if (x == P_outportp)	return OP_OUTPORTP;
 	if (x == P_pair)	return OP_PAIR;
 	if (x == P_set_inport)	return OP_SET_INPORT;
 	if (x == P_set_outport) return OP_SET_OUTPORT;
 	if (x == P_ssize)	return OP_SSIZE;
+	if (x == P_sqrt)	return OP_SQRT;
 	if (x == P_stringp)	return OP_STRINGP;
 	if (x == P_strlist)	return OP_STRLIST;
 	if (x == P_symbol)	return OP_SYMBOL;
 	if (x == P_symbolp)	return OP_SYMBOLP;
 	if (x == P_symname)	return OP_SYMNAME;
+	if (x == P_tan)		return OP_TAN;
 	if (x == P_syscmd)	return OP_SYSCMD;
 	if (x == P_untag)	return OP_UNTAG;
 	if (x == P_upcase)	return OP_UPCASE;
@@ -2533,8 +2616,10 @@ int subr1(cell x) {
 }
 
 int subr2(cell x) {
+	if (x == P_atan2)	return OP_ATAN2;
 	if (x == P_cons)	return OP_CONS;
 	if (x == P_div)		return OP_DIV;
+	if (x == P_expt)	return OP_EXPT;
 	if (x == P_eq)		return OP_EQ;
 	if (x == P_nreconc)	return OP_NRECONC;
 	if (x == P_reconc)	return OP_RECONC;
@@ -3229,46 +3314,62 @@ void fixover(char *who, cell x, cell y) {
 }
 
 cell add(cell x, cell y) {
-	if (!fixp(x)) expect("+", "fixnum", x);
-	if (!fixp(y)) expect("+", "fixnum", y);
-	if (add_ovfl(fixval(x), fixval(y))) fixover("+", x, y);
-	return mkfix(fixval(x) + fixval(y));
+	if (!numberp(x)) expect("+", "number", x);
+	if (!numberp(y)) expect("+", "number", y);
+	if (fixp(x) && fixp(y)) {
+		if (add_ovfl(fixval(x), fixval(y))) fixover("+", x, y);
+		return mkfix(fixval(x) + fixval(y));
+	}
+	return mkfloat(numval(x) + numval(y));
 }
 
 cell xsub(cell x, cell y) {
-	if (!fixp(x)) expect("-", "fixnum", x);
-	if (!fixp(y)) expect("-", "fixnum", y);
-	if (sub_ovfl(fixval(y), fixval(x))) fixover("+", y, x);
-	return mkfix(fixval(y) - fixval(x));
+	if (!numberp(x)) expect("-", "number", x);
+	if (!numberp(y)) expect("-", "number", y);
+	if (fixp(x) && fixp(y)) {
+		if (sub_ovfl(fixval(y), fixval(x))) fixover("+", y, x);
+		return mkfix(fixval(y) - fixval(x));
+	}
+	return mkfloat(numval(y) - numval(x));
 }
 
 cell mul(cell x, cell y) {
 	int	a, b;
 
-	if (!fixp(x)) expect("*", "fixnum", x);
-	if (!fixp(y)) expect("*", "fixnum", y);
-	a = fixval(x);
-	b = fixval(y);
-	/*
-	 * Overflow of a*b is undefined, sooo
-	 */
-	/* Shortcuts, also protect later division */
-	if (0 == a || 0 == b) return Zero;
-	if (1 == a) return y;
-	if (1 == b) return x;
-	/* abs(INT_MIN) is undefined using two's complement, so */
-	if (INT_MIN == a || INT_MIN == b) fixover("*", x, y);
-	/* Catch the rest */
-	/* Bug: result may not be INT_MIN */
-	if (abs(a) > INT_MAX / abs(b)) fixover("*", x, y);
-	return mkfix(a * b);
+	if (!numberp(x)) expect("*", "number", x);
+	if (!numberp(y)) expect("*", "number", y);
+	if (fixp(x) && fixp(y)) {
+		a = fixval(x);
+		b = fixval(y);
+		/*
+		 * Overflow of a*b is undefined, sooo
+		 */
+		/* Shortcuts, also protect later division */
+		if (0 == a || 0 == b) return Zero;
+		if (1 == a) return y;
+		if (1 == b) return x;
+		/* abs(INT_MIN) is undefined using two's complement, so */
+		if (INT_MIN == a || INT_MIN == b) fixover("*", x, y);
+		/* Catch the rest */
+		/* Bug: result may not be INT_MIN */
+		if (abs(a) > INT_MAX / abs(b)) fixover("*", x, y);
+		return mkfix(a * b);
+	}
+	return mkfloat(numval(x) * numval(y));
 }
 
 cell intdiv(cell x, cell y) {
-	if (!fixp(x)) expect("div", "fixnum", x);
-	if (!fixp(y)) expect("div", "fixnum", y);
-	if (0 == fixval(y)) error("div: divide by zero", UNDEF);
-	return mkfix(fixval(x) / fixval(y));
+	if (!numberp(x)) expect("div", "number", x);
+	if (!numberp(y)) expect("div", "number", y);
+	if (fixp(x) && fixp(y)) {
+		if (0 == fixval(y)) error("div: divide by zero", UNDEF);
+		return mkfix(fixval(x) / fixval(y));
+	}
+	{
+		double d = numval(y);
+		if (0.0 == d) error("div: divide by zero", UNDEF);
+		return mkfloat(numval(x) / d);
+	}
 }
 
 cell intrem(cell x, cell y) {
@@ -3281,33 +3382,53 @@ cell intrem(cell x, cell y) {
 #define stackset(n,v)	(vector(Rts)[n] = (v))
 
 void grtr(cell x, cell y) {
-	if (!fixp(x)) expect(">", "fixnum", x);
-	if (!fixp(y)) expect(">", "fixnum", y);
-	if (fixval(y) <= fixval(x)) stackset(Sp-1, NIL);
+	if (!numberp(x)) expect(">", "number", x);
+	if (!numberp(y)) expect(">", "number", y);
+	if (fixp(x) && fixp(y)) {
+		if (fixval(y) <= fixval(x)) stackset(Sp-1, NIL);
+	} else {
+		if (numval(y) <= numval(x)) stackset(Sp-1, NIL);
+	}
 }
 
 void gteq(cell x, cell y) {
-	if (!fixp(x)) expect(">=", "fixnum", x);
-	if (!fixp(y)) expect(">=", "fixnum", y);
-	if (fixval(y) < fixval(x)) stackset(Sp-1, NIL);
+	if (!numberp(x)) expect(">=", "number", x);
+	if (!numberp(y)) expect(">=", "number", y);
+	if (fixp(x) && fixp(y)) {
+		if (fixval(y) < fixval(x)) stackset(Sp-1, NIL);
+	} else {
+		if (numval(y) < numval(x)) stackset(Sp-1, NIL);
+	}
 }
 
 void less(cell x, cell y) {
-	if (!fixp(x)) expect("<", "fixnum", x);
-	if (!fixp(y)) expect("<", "fixnum", y);
-	if (fixval(y) >= fixval(x)) stackset(Sp-1, NIL);
+	if (!numberp(x)) expect("<", "number", x);
+	if (!numberp(y)) expect("<", "number", y);
+	if (fixp(x) && fixp(y)) {
+		if (fixval(y) >= fixval(x)) stackset(Sp-1, NIL);
+	} else {
+		if (numval(y) >= numval(x)) stackset(Sp-1, NIL);
+	}
 }
 
 void lteq(cell x, cell y) {
-	if (!fixp(x)) expect("<=", "fixnum", x);
-	if (!fixp(y)) expect("<=", "fixnum", y);
-	if (fixval(y) > fixval(x)) stackset(Sp-1, NIL);
+	if (!numberp(x)) expect("<=", "number", x);
+	if (!numberp(y)) expect("<=", "number", y);
+	if (fixp(x) && fixp(y)) {
+		if (fixval(y) > fixval(x)) stackset(Sp-1, NIL);
+	} else {
+		if (numval(y) > numval(x)) stackset(Sp-1, NIL);
+	}
 }
 
 void equal(cell x, cell y) {
-	if (!fixp(x)) expect("=", "fixnum", x);
-	if (!fixp(y)) expect("=", "fixnum", y);
-	if (fixval(y) != fixval(x)) stackset(Sp-1, NIL);
+	if (!numberp(x)) expect("=", "number", x);
+	if (!numberp(y)) expect("=", "number", y);
+	if (fixp(x) && fixp(y)) {
+		if (fixval(y) != fixval(x)) stackset(Sp-1, NIL);
+	} else {
+		if (numval(y) != numval(x)) stackset(Sp-1, NIL);
+	}
 }
 
 cell bitop(cell x, cell y, cell o) {
@@ -3958,9 +4079,14 @@ cell numstr(cell x, int r) {
 }
 
 cell strnum(char *s, int r) {
+	cell	n;
+
 	if (r < 2 || r > 36)
 		error("strnum: bad radix", mkfix(r));
-	return scanfix(s, r, 0);
+	n = scanfix(s, r, 0);
+	if (NIL == n && 10 == r)
+		n = scanfloat(s);
+	return n;
 }
 
 /*
@@ -4633,10 +4759,14 @@ void run(cell x) {
 		skip(ISIZE0);
 		break;
 	case OP_ABS:
-		if (!fixp(Acc)) expect("abs", "fixnum", Acc);
-		if (INT_MIN == fixval(Acc))
-			error("abs: fixnum overflow", Acc);
-		if (fixval(Acc) < 0) Acc = mkfix(-fixval(Acc));
+		if (floatp(Acc)) {
+			Acc = mkfloat(fabs(floatval(Acc)));
+		} else {
+			if (!fixp(Acc)) expect("abs", "number", Acc);
+			if (INT_MIN == fixval(Acc))
+				error("abs: fixnum overflow", Acc);
+			if (fixval(Acc) < 0) Acc = mkfix(-fixval(Acc));
+		}
 		skip(ISIZE0);
 		break;
 	case OP_ALPHAC:
@@ -4794,10 +4924,14 @@ void run(cell x) {
 		skip(ISIZE0);
 		break;
 	case OP_NEGATE:
-		if (!fixp(Acc)) expect("-", "fixnum", Acc);
-		if (INT_MIN == fixval(Acc))
-			error("-: fixnum overflow", Acc);
-		Acc = mkfix(-fixval(Acc));
+		if (floatp(Acc)) {
+			Acc = mkfloat(-floatval(Acc));
+		} else {
+			if (!fixp(Acc)) expect("-", "number", Acc);
+			if (INT_MIN == fixval(Acc))
+				error("-: fixnum overflow", Acc);
+			Acc = mkfix(-fixval(Acc));
+		}
 		skip(ISIZE0);
 		break;
 	case OP_NULL:
@@ -4805,9 +4939,16 @@ void run(cell x) {
 		skip(ISIZE0);
 		break;
 	case OP_NUMSTR:
-		if (!fixp(Acc)) expect("numstr", "fixnum", Acc);
-		if (!fixp(arg(0))) expect("numstr", "fixnum", arg(0));
-		Acc = numstr(Acc, fixval(arg(0)));
+		if (floatp(Acc)) {
+			char buf[40];
+			sprintf(buf, "%.15g", floatval(Acc));
+			Acc = mkstr(buf, strlen(buf));
+		} else {
+			if (!fixp(Acc)) expect("numstr", "number", Acc);
+			if (!fixp(arg(0)))
+				expect("numstr", "fixnum", arg(0));
+			Acc = numstr(Acc, fixval(arg(0)));
+		}
 		clear(1);
 		skip(ISIZE0);
 		break;
@@ -5021,12 +5162,24 @@ void run(cell x) {
 		skip(ISIZE0);
 		break;
 	case OP_MAX:
-		if (fixval(arg(0)) > fixval(Acc)) Acc = arg(0);
+		if (!numberp(Acc)) expect("max", "number", Acc);
+		if (!numberp(arg(0))) expect("max", "number", arg(0));
+		if (fixp(Acc) && fixp(arg(0))) {
+			if (fixval(arg(0)) > fixval(Acc)) Acc = arg(0);
+		} else {
+			if (numval(arg(0)) > numval(Acc)) Acc = arg(0);
+		}
 		clear(1);
 		skip(ISIZE0);
 		break;
 	case OP_MIN:
-		if (fixval(arg(0)) < fixval(Acc)) Acc = arg(0);
+		if (!numberp(Acc)) expect("min", "number", Acc);
+		if (!numberp(arg(0))) expect("min", "number", arg(0));
+		if (fixp(Acc) && fixp(arg(0))) {
+			if (fixval(arg(0)) < fixval(Acc)) Acc = arg(0);
+		} else {
+			if (numval(arg(0)) < numval(Acc)) Acc = arg(0);
+		}
 		clear(1);
 		skip(ISIZE0);
 		break;
@@ -5202,6 +5355,148 @@ void run(cell x) {
 		clear(1);
 		skip(ISIZE0);
 		break;
+	case OP_FLOATP:
+		Acc = floatp(Acc)? TRUE: NIL;
+		skip(ISIZE0);
+		break;
+	case OP_NUMBERP:
+		Acc = numberp(Acc)? TRUE: NIL;
+		skip(ISIZE0);
+		break;
+	case OP_FIX2FLO:
+		if (!fixp(Acc)) expect("fixnum->float", "fixnum", Acc);
+		Acc = mkfloat((double) fixval(Acc));
+		skip(ISIZE0);
+		break;
+	case OP_FLO2FIX:
+		if (!floatp(Acc)) expect("float->fixnum", "float", Acc);
+		{
+			double d = floatval(Acc);
+			if (d > INT_MAX || d < INT_MIN)
+				error("float->fixnum: overflow", Acc);
+			Acc = mkfix((int) d);
+		}
+		skip(ISIZE0);
+		break;
+	case OP_FLOOR:
+		if (!numberp(Acc)) expect("floor", "number", Acc);
+		if (floatp(Acc)) Acc = mkfloat(floor(floatval(Acc)));
+		skip(ISIZE0);
+		break;
+	case OP_CEILING:
+		if (!numberp(Acc)) expect("ceiling", "number", Acc);
+		if (floatp(Acc)) Acc = mkfloat(ceil(floatval(Acc)));
+		skip(ISIZE0);
+		break;
+	case OP_ROUND:
+		if (!numberp(Acc)) expect("round", "number", Acc);
+		if (floatp(Acc)) {
+			double d = floatval(Acc);
+			Acc = mkfloat(floor(d + 0.5));
+		}
+		skip(ISIZE0);
+		break;
+	case OP_SQRT:
+		if (!numberp(Acc)) expect("sqrt", "number", Acc);
+		{
+			double d = numval(Acc);
+			if (d < 0) error("sqrt: negative argument", Acc);
+			Acc = mkfloat(sqrt(d));
+		}
+		skip(ISIZE0);
+		break;
+	case OP_SIN:
+		if (!numberp(Acc)) expect("sin", "number", Acc);
+		Acc = mkfloat(sin(numval(Acc)));
+		skip(ISIZE0);
+		break;
+	case OP_COS:
+		if (!numberp(Acc)) expect("cos", "number", Acc);
+		Acc = mkfloat(cos(numval(Acc)));
+		skip(ISIZE0);
+		break;
+	case OP_TAN:
+		if (!numberp(Acc)) expect("tan", "number", Acc);
+		Acc = mkfloat(tan(numval(Acc)));
+		skip(ISIZE0);
+		break;
+	case OP_ASIN:
+		if (!numberp(Acc)) expect("asin", "number", Acc);
+		Acc = mkfloat(asin(numval(Acc)));
+		skip(ISIZE0);
+		break;
+	case OP_ACOS:
+		if (!numberp(Acc)) expect("acos", "number", Acc);
+		Acc = mkfloat(acos(numval(Acc)));
+		skip(ISIZE0);
+		break;
+	case OP_ATAN:
+		if (!numberp(Acc)) expect("atan", "number", Acc);
+		Acc = mkfloat(atan(numval(Acc)));
+		skip(ISIZE0);
+		break;
+	case OP_ATAN2:
+		if (!numberp(Acc)) expect("atan2", "number", Acc);
+		if (!numberp(arg(0))) expect("atan2", "number", arg(0));
+		Acc = mkfloat(atan2(numval(Acc), numval(arg(0))));
+		clear(1);
+		skip(ISIZE0);
+		break;
+	case OP_EXP:
+		if (!numberp(Acc)) expect("exp", "number", Acc);
+		Acc = mkfloat(exp(numval(Acc)));
+		skip(ISIZE0);
+		break;
+	case OP_LOG:
+		if (!numberp(Acc)) expect("log", "number", Acc);
+		{
+			double d = numval(Acc);
+			if (d <= 0) error("log: non-positive argument", Acc);
+			Acc = mkfloat(log(d));
+		}
+		skip(ISIZE0);
+		break;
+	case OP_EXPT:
+		if (!numberp(Acc)) expect("expt", "number", Acc);
+		if (!numberp(arg(0))) expect("expt", "number", arg(0));
+		if (fixp(Acc) && fixp(arg(0)) && fixval(arg(0)) >= 0) {
+			int base = fixval(Acc);
+			int exp = fixval(arg(0));
+			int result = 1;
+			int ok = 1;
+			while (exp > 0) {
+				if (exp & 1) {
+					if (base != 0 &&
+					    abs(result) > INT_MAX / abs(base))
+					{
+						ok = 0;
+						break;
+					}
+					result *= base;
+				}
+				exp >>= 1;
+				if (exp > 0) {
+					if (base != 0 &&
+					    abs(base) > INT_MAX / abs(base))
+					{
+						ok = 0;
+						break;
+					}
+					base *= base;
+				}
+			}
+			if (ok) {
+				Acc = mkfix(result);
+			} else {
+				Acc = mkfloat(pow(numval(Acc),
+						numval(arg(0))));
+			}
+		} else {
+			Acc = mkfloat(pow(numval(Acc), numval(arg(0))));
+		}
+		clear(1);
+		skip(ISIZE0);
+		break;
 	default:
 		error("illegal instruction", mkfix(ins()));
 		return;
@@ -5361,12 +5656,18 @@ void init(void) {
 	S_setq = symref("setq");
 	S_start = symref("start");
 	P_abs = symref("abs");
+	P_acos = symref("acos");
+	P_asin = symref("asin");
+	P_atan = symref("atan");
+	P_atan2 = symref("atan2");
 	P_alphac = symref("alphac");
 	P_atom = symref("atom");
 	P_bitop = symref("bitop");
 	P_caar = symref("caar");
 	P_cadr = symref("cadr");
 	P_car = symref("car");
+	P_ceiling = symref("ceiling");
+	P_cos = symref("cos");
 	P_catchstar = symref("catch*");
 	P_cdar = symref("cdar");
 	P_cddr = symref("cddr");
@@ -5396,7 +5697,13 @@ void init(void) {
 	P_errport = symref("errport");
 	P_eval = symref("eval");
 	P_existsp = symref("existsp");
+	P_exp = symref("exp");
+	P_expt = symref("expt");
+	P_fix2flo = symref("fixnum->float");
 	P_fixp = symref("fixp");
+	P_flo2fix = symref("float->fixnum");
+	P_floatp = symref("floatp");
+	P_floor = symref("floor");
 	P_flush = symref("flush");
 	P_format = symref("format");
 	P_funp = symref("funp");
@@ -5410,6 +5717,7 @@ void init(void) {
 	P_liststr = symref("liststr");
 	P_listvec = symref("listvec");
 	P_load = symref("load");
+	P_log = symref("log");
 	P_lowerc = symref("lowerc");
 	P_lteq = symref("<=");
 	P_max = symref("max");
@@ -5423,6 +5731,7 @@ void init(void) {
 	P_nconc = symref("nconc");
 	P_nreconc = symref("nreconc");
 	P_null = symref("null");
+	P_numberp = symref("numberp");
 	P_numeric = symref("numeric");
 	P_numstr = symref("numstr");
 	P_obtab = symref("obtab");
@@ -5441,6 +5750,9 @@ void init(void) {
 	P_reconc = symref("reconc");
 	P_rem = symref("rem");
 	P_rename = symref("rename");
+	P_round = symref("round");
+	P_sin = symref("sin");
+	P_sqrt = symref("sqrt");
 	P_sconc = symref("sconc");
 	P_sequal = symref("s=");
 	P_set_inport = symref("set-inport");
@@ -5470,6 +5782,7 @@ void init(void) {
 	P_symname = symref("symname");
 	P_symtab = symref("symtab");
 	P_syscmd = symref("syscmd");
+	P_tan = symref("tan");
 	P_throwstar = symref("throw*");
 	P_times = symref("*");
 	P_untag = symref("untag");

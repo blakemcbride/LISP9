@@ -294,6 +294,9 @@ nil t
         ((and (fixp a)
               (fixp b)
               (= a b)))
+        ((and (floatp a)
+              (floatp b)
+              (= a b)))
         ((and (charp a)
               (charp b)
               (c= a b)))
@@ -534,6 +537,7 @@ nil t
 (defun (gensym) (gensym))
 (defun (obtab) (obtab))
 (defun (quit) (quit))
+(defun (exit) (quit))
 (defun (symtab) (symtab))
 
 (defun (abs x) (abs x))
