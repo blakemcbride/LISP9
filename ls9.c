@@ -2147,7 +2147,8 @@ cell lastpair(cell x) {
 }
 
 cell	Env = NIL,
-	Envp = NIL;
+	Envp = NIL,
+	Defined = NIL;
 
 void newvar(cell x) {
 	cell	n;
@@ -2285,6 +2286,8 @@ cell defconv(cell x, cell e, cell a) {
 	cell	n, m;
 
 	newvar(cadr(x));
+	if (memq(cadr(x), Defined) == NIL)
+		Defined = cons(cadr(x), Defined);
 	n = cons(cconv(caddr(x), e, a), NIL);
 	protect(n);
 	m = mkfix(posq(cadr(x), e));
@@ -2302,9 +2305,17 @@ cell cconv(cell x, cell e, cell a) {
 		 S_if == car(x)     ||
 		 S_ifstar == car(x) ||
 		 S_prog == car(x)   ||
-		 S_setq == car(x)   ||
 		 subrp(car(x))))
 	{
+		return cons(car(x), mapconv(cdr(x), e, a));
+	}
+	if (pairp(x) && S_setq == car(x)) {
+		if (	e == Env &&
+			symbolp(cadr(x)) &&
+			memq(cadr(x), Defined) == NIL)
+		{
+			error("undefined symbol", cadr(x));
+		}
 		return cons(car(x), mapconv(cdr(x), e, a));
 	}
 	if ((n = posq(x, a)) != NIL) {
@@ -2383,6 +2394,7 @@ cell clsconv(cell x) {
 
 	Env = carof(Glob);
 	Envp = NIL;
+	if (NIL == Defined) Defined = carof(Glob);
 	if (NIL == Env) Env = cons(UNDEF, NIL);
 	n = cconv(x, Env, NIL);
 	protect(n);
@@ -5818,10 +5830,11 @@ void start(void) {
 
 cell	*Imagevars[] = {
 		&Freelist, &Freevec, &Symbols, &Symhash, &Symptr,
-		&Rts, &Glob, &Macros, &Obhash, &Obarray, &Obmap, NULL };
+		&Rts, &Glob, &Macros, &Obhash, &Obarray, &Obmap,
+		&Defined, NULL };
 
 cell	*GC_roots[] = {
-		&Protected, &Symbols, &Symhash, &Prog, &Env, &Obhash,
+		&Protected, &Symbols, &Symhash, &Prog, &Env, &Defined, &Obhash,
 		&Obarray, &Obmap, &Cts, &Emitbuf, &Glob, &Macros, &Rts,
 		&Acc, &E0, &Ep, &Argv, &Tmp, &Tmp_car, &Tmp_cdr, &Files,
 		&Outstr, &Nullvec, &Nullstr, &Blank, &Zero, &One, &Ten,
